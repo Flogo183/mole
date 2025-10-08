@@ -1,81 +1,198 @@
-import os  # Standard library: filesystem ops like listdir, path join, mkdir
-import json  # Standard library: write results to JSON files
-
-from binaryninja import BinaryViewType, PluginCommand
-# Binary Ninja API
-# BinaryViewType opens a binary and gives you a BinaryView handle
-# PluginCommand lets you add a menu entry in BN’s Plugins menu
-
-from mole.controllers.path import run_analysis_with_ai
-# Mole entrypoint inside your plugin that runs path discovery and then the AI analysis per path
-
-# --- Your paths ---
-BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/CASTLE_repo/CASTLE-Benchmark/datasets/CASTLE-C250_binaries"
-# Absolute folder where your compiled CASTLE binaries live
-
-OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE"
-# Absolute folder where per binary JSON reports will be written
-
-dataset = "CASTLE"
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-# Ensure the output directory exists. If it already exists, do nothing
+import os
+import json
+import time
+from binaryninja import PluginCommand, BinaryViewType
+from mole.common.log import log
+from mole.common.task import BackgroundTask
 
 
-def run_batch_mole(bv=None):
+def init(path_ctr):
     """
-    Batch-process all binaries in BINARIES_DIR using Mole+AI
-    and save JSON reports to OUTPUT_DIR.
+    Initialize the batch runner with the shared path_ctr from the plugin.
+    Registers a BN plugin command to run batch analysis.
     """
-    # Binary Ninja passes a BinaryView when a command is run from the UI
-    # We do not use that view since we open each file ourselves
 
-    for fname in os.listdir(BINARIES_DIR):
-        # Iterate every directory entry in your binaries folder
+    class BatchRunnerTask(BackgroundTask):
+        """
+        Background task for running batch analysis to avoid freezing the UI.
+        """
 
-        fpath = os.path.join(BINARIES_DIR, fname)
-        # Build the absolute path to the current entry
+        def __init__(self, path_ctr):
+            super().__init__("Running batch analysis...", True)
+            self.path_ctr = path_ctr
 
-        if not os.path.isfile(fpath):
-            continue
-        # Skip subfolders and non files
+        def run(self):
+            """
+            Run the batch processing in the background.
+            """
+            # Hardcoded paths for now
+            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/CASTLE_repo/CASTLE-Benchmark/datasets/CASTLE-C250_binaries"
+            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE"
 
-        print(f"[+] Analyzing {fname} ...")
-        # Simple progress message in BN’s log console
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-        try:
-            bv = BinaryViewType.get_view_of_file(fpath)
-            # Open the file in Binary Ninja and create a BinaryView
-            # BN will auto analyze lazily. If you ever need to block until ready, you can call:
-            # bv.update_analysis_and_wait()
+            binary_files = [
+                f
+                for f in os.listdir(BINARIES_DIR)
+                if os.path.isfile(os.path.join(BINARIES_DIR, f))
+            ]
+            total_files = len(binary_files)
 
-            results = run_analysis_with_ai(bv)
-            # Hand the BinaryView to Mole’s analyzer that
-            # 1 finds source to sink paths
-            # 2 runs the LLM on each path
-            # Returns a Python object suitable for JSON, usually a dict with per path AI reports
+            for i, fname in enumerate(binary_files):
+                if self.cancelled:
+                    log.info("BatchRunner", "Batch processing cancelled by user")
+                    break
 
-            outpath = os.path.join(OUTPUT_DIR, f"{fname}.json")
-            # Decide where to save this binary’s report
+                self.progress = f"Processing {fname} ({i + 1}/{total_files})"
+                fpath = os.path.join(BINARIES_DIR, fname)
 
-            with open(outpath, "w") as f:
-                json.dump(results, f, indent=2)
-            # Persist the Mole plus AI result to a JSON file
+                log.info("BatchRunner", f"Processing {fname} ({i + 1}/{total_files})")
 
-            print(f"    -> Saved report to {outpath}")
-            # Confirmation
+                # Load binary in BN
+                try:
+                    bv = BinaryViewType["ELF"].open(fpath)
+                    if not bv:
+                        log.warn("BatchRunner", f"Could not open {fname}")
+                        continue
+                    bv.update_analysis_and_wait()
+                except Exception as e:
+                    log.error("BatchRunner", f"Failed to load {fname}: {e}")
+                    continue
 
-        except Exception as e:
-            print(f"[!] Error analyzing {fname}: {e}")
-            # Any failure on a single file is logged. The loop continues to the next file
+                try:
+                    # Attach the BinaryView so path_ctr works
+                    self.path_ctr._bv = bv
 
+                    # Clear old paths before processing this binary
+                    if self.path_ctr.path_tree_view:
+                        cleared_count = self.path_ctr.path_tree_view.clear_all_paths()
+                        log.info(
+                            "BatchRunner", f"Cleared {cleared_count} existing path(s)"
+                        )
+                    else:
+                        log.warn(
+                            "BatchRunner", f"No PathTreeView available for {fname}"
+                        )
+                        continue
 
-# Register command inside BN Plugins menu
-PluginCommand.register(
-    "Mole\\Batch Run {dataset}",
-    # This is exactly how it will appear in Plugins → Mole → Batch Run CASTLE
-    "Run Mole+AI on all {dataset}) binaries and save reports",
-    # One line help text in the menu
-    run_batch_mole,
-    # The function that runs when you click the menu item
-)
+                    # Run Mole path finding
+                    log.info("BatchRunner", f"Starting path finding for {fname}")
+                    self.path_ctr.find_paths()
+
+                    # Wait until path finding is finished
+                    while not self.path_ctr.thread_finished:
+                        if self.cancelled:
+                            log.info(
+                                "BatchRunner",
+                                "Batch processing cancelled during path finding",
+                            )
+                            return
+                        time.sleep(0.5)
+
+                    log.info("BatchRunner", f"Path finding completed for {fname}")
+
+                    # Verify path_tree_view is available
+                    if not self.path_ctr.path_tree_view:
+                        log.warn(
+                            "BatchRunner",
+                            f"No PathTreeView available after path finding for {fname}",
+                        )
+                        continue
+
+                    # Get all path IDs from the model
+                    path_ids = list(self.path_ctr.path_tree_view.model.path_ids)
+                    if not path_ids:
+                        log.info("BatchRunner", f"No paths found in {fname}")
+                        # Still save an empty result file
+                        out_file = os.path.join(OUTPUT_DIR, f"{fname}.json")
+                        with open(out_file, "w") as fp:
+                            json.dump([], fp, indent=2)
+                        log.info("BatchRunner", f"Saved empty result to {out_file}")
+                        continue
+
+                    log.info("BatchRunner", f"Found {len(path_ids)} path(s) in {fname}")
+
+                    # Run AI analysis on all paths
+                    log.info(
+                        "BatchRunner",
+                        f"Starting AI analysis for {len(path_ids)} path(s)",
+                    )
+                    self.path_ctr.analyze_paths(path_ids)
+
+                    # Wait until AI analysis finishes
+                    while not self.path_ctr.thread_finished:
+                        if self.cancelled:
+                            log.info(
+                                "BatchRunner",
+                                "Batch processing cancelled during AI analysis",
+                            )
+                            return
+                        time.sleep(0.5)
+
+                    log.info("BatchRunner", f"AI analysis completed for {fname}")
+
+                    # Collect results
+                    results = []
+                    for pid in path_ids:
+                        try:
+                            path = self.path_ctr.path_tree_view.get_path(pid)
+                            if not path:
+                                log.warn(
+                                    "BatchRunner", f"Could not retrieve path {pid}"
+                                )
+                                continue
+
+                            # Export path data using to_dict()
+                            data = path.to_dict()
+
+                            # Note: ai_report is already included in to_dict() output
+                            # but we can also check and attach it explicitly if needed
+                            if hasattr(path, "ai_report") and path.ai_report:
+                                # to_dict() already includes ai_report, but this ensures it's there
+                                if "ai_report" not in data or data["ai_report"] is None:
+                                    data["ai_report"] = path.ai_report.to_dict()
+
+                            results.append(data)
+                        except Exception as e:
+                            log.error(
+                                "BatchRunner", f"Failed to export path {pid}: {e}"
+                            )
+                            continue
+
+                    # Save JSON report
+                    out_file = os.path.join(OUTPUT_DIR, f"{fname}.json")
+                    with open(out_file, "w") as fp:
+                        json.dump(results, fp, indent=2)
+
+                    log.info(
+                        "BatchRunner", f"Saved {len(results)} path(s) to {out_file}"
+                    )
+
+                except Exception as e:
+                    log.error("BatchRunner", f"Error processing {fname}: {e}")
+                finally:
+                    # Explicit cleanup
+                    try:
+                        if bv:
+                            bv.file.close()
+                            del bv
+                    except Exception as e:
+                        log.error("BatchRunner", f"Error closing {fname}: {e}")
+
+            if not self.cancelled:
+                log.info("BatchRunner", "Batch processing completed!")
+
+    def run_batch(bv=None):
+        """
+        Start the batch runner as a background task.
+        """
+        log.info("BatchRunner", "Starting batch processing in background...")
+        task = BatchRunnerTask(path_ctr)
+        task.start()
+
+    # Register command in BN
+    PluginCommand.register(
+        "Mole\\Batch Run CASTLE",
+        "Run Find Paths + AI Analysis + Save JSON reports (Background)",
+        run_batch,
+    )
