@@ -103,11 +103,70 @@ def init(path_ctr):
                     path_ids = list(self.path_ctr.path_tree_view.model.path_ids)
                     if not path_ids:
                         log.info("BatchRunner", f"No paths found in {fname}")
-                        # Still save an empty result file
+
+                        # Collect information about sources and sinks actually detected in this binary
+                        detected_sources = []
+                        detected_sinks = []
+
+                        try:
+                            from mole.common.helper.symbol import SymbolHelper
+
+                            # Get configured source functions and check which are in the binary
+                            src_funs = (
+                                self.path_ctr.config_ctr.config_model.get_functions(
+                                    fun_type="Sources", fun_enabled=True
+                                )
+                            )
+                            for src_fun in src_funs:
+                                code_refs = SymbolHelper.get_code_refs(
+                                    bv, src_fun.symbols
+                                )
+                                for symbol_name, refs in code_refs.items():
+                                    if refs:  # If there are actual code references to this symbol
+                                        detected_sources.append(symbol_name)
+
+                            # Get configured sink functions and check which are in the binary
+                            snk_funs = (
+                                self.path_ctr.config_ctr.config_model.get_functions(
+                                    fun_type="Sinks", fun_enabled=True
+                                )
+                            )
+                            for snk_fun in snk_funs:
+                                code_refs = SymbolHelper.get_code_refs(
+                                    bv, snk_fun.symbols
+                                )
+                                for symbol_name, refs in code_refs.items():
+                                    if refs:  # If there are actual code references to this symbol
+                                        detected_sinks.append(symbol_name)
+
+                        except Exception as e:
+                            log.warn(
+                                "BatchRunner",
+                                f"Could not retrieve detected source/sink info: {e}",
+                            )
+
+                        # Remove duplicates and sort for consistency
+                        detected_sources = sorted(list(set(detected_sources)))
+                        detected_sinks = sorted(list(set(detected_sinks)))
+
+                        # Create informative result even when no paths found
+                        no_paths_result = {
+                            "status": "no_paths_detected",
+                            "detected_sources": detected_sources
+                            if detected_sources
+                            else ["none_detected"],
+                            "detected_sinks": detected_sinks
+                            if detected_sinks
+                            else ["none_detected"],
+                            "message": f"No vulnerability paths detected between sources and sinks in {fname}",
+                            "binary_file": fname,
+                        }
+
+                        # Still save the informative result
                         out_file = os.path.join(OUTPUT_DIR, f"{fname}.json")
                         with open(out_file, "w") as fp:
-                            json.dump([], fp, indent=2)
-                        log.info("BatchRunner", f"Saved empty result to {out_file}")
+                            json.dump([no_paths_result], fp, indent=2)
+                        log.info("BatchRunner", f"Saved no-paths info to {out_file}")
                         continue
 
                     log.info("BatchRunner", f"Found {len(path_ids)} path(s) in {fname}")
@@ -131,7 +190,7 @@ def init(path_ctr):
 
                     log.info("BatchRunner", f"AI analysis completed for {fname}")
 
-                    # Collect results
+                    # Collect results with simplified output
                     results = []
                     for pid in path_ids:
                         try:
@@ -142,17 +201,53 @@ def init(path_ctr):
                                 )
                                 continue
 
-                            # Export path data using to_dict()
-                            data = path.to_dict()
+                            # Create simplified path data with AI report
+                            simplified_data = {
+                                "path_id": pid,
+                                "source": {
+                                    "function": path.src_sym_name,
+                                    "address": hex(path.src_sym_addr),
+                                    "parameter_index": path.src_par_idx,
+                                },
+                                "sink": {
+                                    "function": path.snk_sym_name,
+                                    "address": hex(path.snk_sym_addr),
+                                    "parameter_index": path.snk_par_idx,
+                                },
+                                "comment": path.comment if path.comment else None,
+                            }
 
-                            # Note: ai_report is already included in to_dict() output
-                            # but we can also check and attach it explicitly if needed
+                            # Include AI report if available
                             if hasattr(path, "ai_report") and path.ai_report:
-                                # to_dict() already includes ai_report, but this ensures it's there
-                                if "ai_report" not in data or data["ai_report"] is None:
-                                    data["ai_report"] = path.ai_report.to_dict()
+                                ai_data = {
+                                    "truePositive": path.ai_report.truePositive,
+                                    "vulnerabilityClass": str(
+                                        path.ai_report.vulnerabilityClass
+                                    )
+                                    if hasattr(path.ai_report, "vulnerabilityClass")
+                                    else None,
+                                    "shortExplanation": path.ai_report.shortExplanation,
+                                    "severityLevel": str(path.ai_report.severityLevel)
+                                    if hasattr(path.ai_report, "severityLevel")
+                                    else None,
+                                    "inputExample": path.ai_report.inputExample,
+                                    "path_id": path.ai_report.path_id,
+                                    "model": path.ai_report.model,
+                                    "Convesation turns": path.ai_report.turns,
+                                    "tool_calls": path.ai_report.tool_calls,
+                                    "prompt_tokens": path.ai_report.prompt_tokens,
+                                    "completion_tokens": path.ai_report.completion_tokens,
+                                    "total_tokens": path.ai_report.total_tokens,
+                                    "temperature": path.ai_report.temperature,
+                                    "timestamp": path.ai_report.timestamp.isoformat()
+                                    if hasattr(path.ai_report.timestamp, "isoformat")
+                                    else str(path.ai_report.timestamp),
+                                }
+                                simplified_data["ai_report"] = ai_data
+                            else:
+                                simplified_data["ai_report"] = None
 
-                            results.append(data)
+                            results.append(simplified_data)
                         except Exception as e:
                             log.error(
                                 "BatchRunner", f"Failed to export path {pid}: {e}"
