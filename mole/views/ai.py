@@ -28,6 +28,9 @@ class AiView(qtw.QWidget):
         self._input_example_txt: qtw.QPlainTextEdit = qtw.QPlainTextEdit(readOnly=True)
         self._model_lbl: qtw.QLabel = qtw.QLabel("")
         self._tool_calls_lbl: qtw.QLabel = qtw.QLabel("")
+        self._tools_used_lbl: qtw.QLabel = qtw.QLabel(
+            ""
+        )  # New label for specific tools
         self._turns: qtw.QLabel = qtw.QLabel("")
         self._token_usage_lbl: qtw.QLabel = qtw.QLabel("")
         self._temperature_lbl: qtw.QLabel = qtw.QLabel("")
@@ -79,12 +82,14 @@ class AiView(qtw.QWidget):
         info_lay.addWidget(self._turns, 1, 1)
         info_lay.addWidget(qtw.QLabel("Tool Calls:"), 2, 0)
         info_lay.addWidget(self._tool_calls_lbl, 2, 1)
-        info_lay.addWidget(qtw.QLabel("Token Usage:"), 3, 0)
-        info_lay.addWidget(self._token_usage_lbl, 3, 1)
-        info_lay.addWidget(qtw.QLabel("Temperature:"), 4, 0)
-        info_lay.addWidget(self._temperature_lbl, 4, 1)
-        info_lay.addWidget(qtw.QLabel("Timestamp:"), 5, 0)
-        info_lay.addWidget(self._timestamp_lbl, 5, 1)
+        info_lay.addWidget(qtw.QLabel("Tools Used:"), 3, 0)
+        info_lay.addWidget(self._tools_used_lbl, 3, 1)
+        info_lay.addWidget(qtw.QLabel("Token Usage:"), 4, 0)
+        info_lay.addWidget(self._token_usage_lbl, 4, 1)
+        info_lay.addWidget(qtw.QLabel("Temperature:"), 5, 0)
+        info_lay.addWidget(self._temperature_lbl, 5, 1)
+        info_lay.addWidget(qtw.QLabel("Timestamp:"), 6, 0)
+        info_lay.addWidget(self._timestamp_lbl, 6, 1)
         # Information widget
         info_wid = qtw.QWidget()
         info_wid.setLayout(info_lay)
@@ -150,6 +155,9 @@ class AiView(qtw.QWidget):
         # Information
         self._model_lbl.setText(report.model)
         self._tool_calls_lbl.setText(f"{report.tool_calls:d}")
+        self._tools_used_lbl.setText(
+            ", ".join(report.tools_used) if report.tools_used else "None"
+        )  # Display specific tools
         self._turns.setText(f"{report.turns:d}")
         token_usage_txt = f"Prompt: {report.prompt_tokens:d}, "
         token_usage_txt += f"Completion: {report.completion_tokens:d}, "

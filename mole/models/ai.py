@@ -33,7 +33,7 @@ class VulnerabilityClass(IndexedLabeledEnum):
     MEMORY_RESOURCE_LEAK = (8, "Memory / Resource Leak (CWE-401)")
     COMMAND_CODE_INJECTION = (
         9,
-        "Command Injection / Arbitrary Code Execution (CWE-77, CWE-94)",
+        "Command Injection / Arbitrary Code Execution (CWE-77, CWE-78, CWE-94)",
     )
     RACE_CONDITION = (10, "Race Condition (CWE-362)")
     IMPROPER_ACCESS_CONTROL = (
@@ -46,7 +46,19 @@ class VulnerabilityClass(IndexedLabeledEnum):
         "Path Traversal / Insecure File Access (CWE-22, CWE-73)",
     )
     INFORMATION_DISCLOSURE = (14, "Information Disclosure / Insecure Storage (CWE-200)")
-    OTHER = (15, "Other / Unknown")
+    SQL_INJECTION = (
+        15,
+        "Improper Neutralization of Special Elements used in an SQL Command (CWE-89)",
+    )
+    FORMAT_STRING_VULNERABILITIES = (
+        16,
+        "Use of Externally-Controlled Format String (CWE-134)",
+    )
+    LDAP_INJECTION = (
+        17,
+        "Improper Neutralization of Special Elements in an LDAP Query (CWE-90)",
+    )
+    OTHER = (18, "Other / Unknown")
 
 
 class VulnerabilityReport(BaseModel):
@@ -71,6 +83,7 @@ class AiVulnerabilityReport(VulnerabilityReport):
     model: str
     turns: int
     tool_calls: int
+    tools_used: List[str]  # List of specific tools called
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
@@ -85,6 +98,7 @@ class AiVulnerabilityReport(VulnerabilityReport):
                 "model": self.model,
                 "turns": self.turns,
                 "tool_calls": self.tool_calls,
+                "tools_used": self.tools_used,  # Add the specific tools list
                 "prompt_tokens": self.prompt_tokens,
                 "completion_tokens": self.completion_tokens,
                 "total_tokens": self.total_tokens,

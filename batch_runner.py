@@ -63,12 +63,15 @@ def init(path_ctr):
                     # Attach the BinaryView so path_ctr works
                     self.path_ctr._bv = bv
 
-                    # Clear old paths before processing this binary
+                    # Clear old paths before processing this binary (CRITICAL: prevents path merging)
                     if self.path_ctr.path_tree_view:
                         cleared_count = self.path_ctr.path_tree_view.clear_all_paths()
                         log.info(
-                            "BatchRunner", f"Cleared {cleared_count} existing path(s)"
+                            "BatchRunner",
+                            f"Cleared {cleared_count} existing path(s) before processing {fname}",
                         )
+                        # Force a small delay to ensure clearing is complete
+                        time.sleep(0.1)
                     else:
                         log.warn(
                             "BatchRunner", f"No PathTreeView available for {fname}"
@@ -151,6 +154,7 @@ def init(path_ctr):
 
                         # Create informative result even when no paths found
                         no_paths_result = {
+                            "binary_file": fname,  # Binary name first for better organization
                             "status": "no_paths_detected",
                             "detected_sources": detected_sources
                             if detected_sources
@@ -159,7 +163,6 @@ def init(path_ctr):
                             if detected_sinks
                             else ["none_detected"],
                             "message": f"No vulnerability paths detected between sources and sinks in {fname}",
-                            "binary_file": fname,
                         }
 
                         # Still save the informative result
@@ -167,6 +170,17 @@ def init(path_ctr):
                         with open(out_file, "w") as fp:
                             json.dump([no_paths_result], fp, indent=2)
                         log.info("BatchRunner", f"Saved no-paths info to {out_file}")
+
+                        # Clear any potential leftover paths even in no-paths case
+                        if self.path_ctr.path_tree_view:
+                            cleared_count = (
+                                self.path_ctr.path_tree_view.clear_all_paths()
+                            )
+                            if cleared_count > 0:
+                                log.info(
+                                    "BatchRunner",
+                                    f"No-paths cleanup: cleared {cleared_count} unexpected path(s) for {fname}",
+                                )
                         continue
 
                     log.info("BatchRunner", f"Found {len(path_ids)} path(s) in {fname}")
@@ -203,6 +217,7 @@ def init(path_ctr):
 
                             # Create simplified path data with AI report
                             simplified_data = {
+                                "binary_file": fname,  # Binary name first for better organization and safety
                                 "path_id": pid,
                                 "source": {
                                     "function": path.src_sym_name,
@@ -235,6 +250,9 @@ def init(path_ctr):
                                     "model": path.ai_report.model,
                                     "Convesation turns": path.ai_report.turns,
                                     "tool_calls": path.ai_report.tool_calls,
+                                    "tools_used": path.ai_report.tools_used
+                                    if hasattr(path.ai_report, "tools_used")
+                                    else [],  # Add specific tools
                                     "prompt_tokens": path.ai_report.prompt_tokens,
                                     "completion_tokens": path.ai_report.completion_tokens,
                                     "total_tokens": path.ai_report.total_tokens,
@@ -262,6 +280,14 @@ def init(path_ctr):
                     log.info(
                         "BatchRunner", f"Saved {len(results)} path(s) to {out_file}"
                     )
+
+                    # Clear paths after saving to prevent merging with next binary
+                    if self.path_ctr.path_tree_view:
+                        cleared_count = self.path_ctr.path_tree_view.clear_all_paths()
+                        log.info(
+                            "BatchRunner",
+                            f"Post-processing cleanup: cleared {cleared_count} path(s) for {fname}",
+                        )
 
                 except Exception as e:
                     log.error("BatchRunner", f"Error processing {fname}: {e}")

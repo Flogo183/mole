@@ -267,6 +267,9 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                 model="mock-mode",
                 turns=random.randint(1, self._max_turns),
                 tool_calls=random.randint(1, self._max_turns * 2),
+                tools_used=random.sample(
+                    list(tools.keys()), k=random.randint(0, min(3, len(tools)))
+                ),  # Mock some random tools
                 prompt_tokens=random.randint(1, self._max_completion_tokens),
                 completion_tokens=random.randint(1, self._max_completion_tokens),
                 total_tokens=random.randint(1, self._max_completion_tokens),
@@ -283,6 +286,7 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
             # Conversation turns
             response = None
             cnt_tool_calls = 0
+            tools_used = []  # Track specific tools called
             token_usage = {
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
@@ -333,10 +337,14 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                     )
                     break
                 # Execute tool calls and add results to the conversation messages
-                messages.extend(
-                    self._execute_tool_calls(response.tool_calls, custom_tag)
-                )
+                tool_results = self._execute_tool_calls(response.tool_calls, custom_tag)
+                messages.extend(tool_results)
                 cnt_tool_calls += len(response.tool_calls)
+                # Track specific tools used
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call.function.name
+                    if tool_name not in tools_used:
+                        tools_used.append(tool_name)
             # Return vulnerability report if final response is available
             if not response or not response.parsed:
                 log.error(custom_tag, "No vulnerability report received")
@@ -347,6 +355,7 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                 model=self._model,
                 turns=turn,
                 tool_calls=cnt_tool_calls,
+                tools_used=tools_used,  # Add the specific tools list
                 prompt_tokens=token_usage["prompt_tokens"],
                 completion_tokens=token_usage["completion_tokens"],
                 total_tokens=token_usage["total_tokens"],
