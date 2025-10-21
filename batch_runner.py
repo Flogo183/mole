@@ -1,9 +1,96 @@
 import os
 import json
 import time
+from datetime import datetime
 from binaryninja import PluginCommand, BinaryViewType
 from mole.common.log import log
 from mole.common.task import BackgroundTask
+
+
+class LogCapture:
+    """Simple log capture for debugging no-paths cases"""
+
+    def __init__(self):
+        self.logs = []
+        self.original_log_methods = {}
+
+    def start_capture(self):
+        """Start capturing log messages"""
+        self.logs = []
+
+        # Store original methods
+        self.original_log_methods = {
+            "debug": log.debug,
+            "info": log.info,
+            "warn": log.warn,
+            "error": log.error,
+        }
+
+        # Replace with capturing methods
+        log.debug = lambda module, message: self._capture_and_forward(
+            "DEBUG", module, message
+        )
+        log.info = lambda module, message: self._capture_and_forward(
+            "INFO", module, message
+        )
+        log.warn = lambda module, message: self._capture_and_forward(
+            "WARNING", module, message
+        )
+        log.error = lambda module, message: self._capture_and_forward(
+            "ERROR", module, message
+        )
+
+    def stop_capture(self):
+        """Stop capturing and restore original methods"""
+        if not self.original_log_methods:
+            return
+
+        try:
+            for level, original_method in self.original_log_methods.items():
+                setattr(log, level, original_method)
+        except Exception as e:
+            print(f"Warning: Could not restore log methods: {e}")
+
+    def _capture_and_forward(self, level, module, message):
+        """Capture and forward log message"""
+        # Store the log
+        self.logs.append(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "level": level,
+                "module": module,
+                "message": message,
+            }
+        )
+
+        # Forward to original
+        original_method = self.original_log_methods.get(level.lower())
+        if original_method:
+            try:
+                original_method(module, message)
+            except Exception:
+                print(f"[{level}] [{module}] {message}")
+
+    def get_logs(self):
+        """Get all captured logs"""
+        return self.logs.copy()
+
+    def get_debug_summary(self):
+        """Get all captured logs as formatted strings, filtering noisy entries"""
+        filtered = []
+        seen = set()
+        for entry in self.logs:
+            msg = entry.get("message", "")
+            # Drop noisy cross-reference scans
+            if "finding code cross-references" in msg.lower():
+                continue
+            line = f"[{entry.get('level')}] [{entry.get('module')}] {msg}"
+            # Avoid exact duplicates to keep logs compact
+            if line in seen:
+                continue
+            seen.add(line)
+            filtered.append(line)
+        return filtered
 
 
 def init(path_ctr):
@@ -20,6 +107,7 @@ def init(path_ctr):
         def __init__(self, path_ctr):
             super().__init__("Running batch analysis...", True)
             self.path_ctr = path_ctr
+            self.log_capture = LogCapture()  # Initialize log capture
 
         def run(self):
             """
@@ -27,7 +115,9 @@ def init(path_ctr):
             """
             # Hardcoded paths for now
             BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/CASTLE_repo/CASTLE-Benchmark/datasets/CASTLE-C250_binaries"
-            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE"
+            OUTPUT_DIR = (
+                "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE_test"
+            )
 
             os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -60,6 +150,9 @@ def init(path_ctr):
                     continue
 
                 try:
+                    # Initialize log capture variable
+                    captured_logs = []
+
                     # Attach the BinaryView so path_ctr works
                     self.path_ctr._bv = bv
 
@@ -78,8 +171,12 @@ def init(path_ctr):
                         )
                         continue
 
-                    # Run Mole path finding
+                    # Run Mole path finding with log capture
                     log.info("BatchRunner", f"Starting path finding for {fname}")
+
+                    # Start capturing logs for debugging no-paths cases
+                    self.log_capture.start_capture()
+
                     self.path_ctr.find_paths()
 
                     # Wait until path finding is finished
@@ -89,8 +186,19 @@ def init(path_ctr):
                                 "BatchRunner",
                                 "Batch processing cancelled during path finding",
                             )
+                            self.log_capture.stop_capture()
                             return
                         time.sleep(0.5)
+
+                    # Stop log capture and get captured logs
+                    self.log_capture.stop_capture()
+                    captured_logs = self.log_capture.get_logs()
+
+                    # Debug: Log how many entries we captured
+                    log.info(
+                        "BatchRunner",
+                        f"Captured {len(captured_logs)} log entries during path finding",
+                    )
 
                     log.info("BatchRunner", f"Path finding completed for {fname}")
 
@@ -170,6 +278,47 @@ def init(path_ctr):
                         with open(out_file, "w") as fp:
                             json.dump([no_paths_result], fp, indent=2)
                         log.info("BatchRunner", f"Saved no-paths info to {out_file}")
+
+                        # Save debug logs for no-paths case
+                        if captured_logs:
+                            debug_log_data = {
+                                "binary_file": fname,
+                                "status": "debug_logs_no_paths",
+                                "analysis_timestamp": time.strftime(
+                                    "%Y-%m-%d %H:%M:%S"
+                                ),
+                                "detected_sources": detected_sources,
+                                "detected_sinks": detected_sinks,
+                                "debug_logs": self.log_capture.get_debug_summary(),
+                                "log_statistics": {
+                                    "total_log_entries": len(captured_logs),
+                                    "log_levels": {
+                                        level: sum(
+                                            1
+                                            for log_entry in captured_logs
+                                            if log_entry.get("level") == level
+                                        )
+                                        for level in [
+                                            "DEBUG",
+                                            "INFO",
+                                            "WARNING",
+                                            "ERROR",
+                                        ]
+                                    },
+                                    "capture_status": "enabled"
+                                    if len(captured_logs) > 0
+                                    else "no_logs_captured",
+                                },
+                            }
+
+                            debug_log_file = os.path.join(
+                                OUTPUT_DIR, f"{fname}_debug_logs.json"
+                            )
+                            with open(debug_log_file, "w") as fp:
+                                json.dump(debug_log_data, fp, indent=2)
+                            log.info(
+                                "BatchRunner", f"Saved debug logs to {debug_log_file}"
+                            )
 
                         # Clear any potential leftover paths even in no-paths case
                         if self.path_ctr.path_tree_view:
@@ -291,6 +440,13 @@ def init(path_ctr):
 
                 except Exception as e:
                     log.error("BatchRunner", f"Error processing {fname}: {e}")
+
+                    # Ensure log capture is stopped even on error
+                    try:
+                        self.log_capture.stop_capture()
+                    except Exception:
+                        pass
+
                 finally:
                     # Explicit cleanup
                     try:
