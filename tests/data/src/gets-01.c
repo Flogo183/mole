@@ -1,24 +1,23 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #define BUF_LEN 16
 
 /*
 Testcase Description:
-- gets with memcpy
+- gets
 */
 
-int main(int argc, char *argv[]) {
-    char dest[BUF_LEN];
-    char src[BUF_LEN];
+char *gets(char *s);
 
-    if(gets(src) == NULL) {
+int main(int argc, char *argv[]) {
+    char s[BUF_LEN];
+
+    if(gets(s) == NULL) {
         fprintf(stderr, "Could not read from STDIN.\n");
         return EXIT_FAILURE;
     }
 
-    memcpy(dest, src, BUF_LEN);
-    fprintf(stdout, "dest: '%s'\n", dest);
+    fprintf(stdout, "s: '%s'\n", s);
     return EXIT_SUCCESS;
 }
