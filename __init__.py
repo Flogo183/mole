@@ -9,6 +9,7 @@ from mole.views.config import ConfigView
 from mole.views.path import PathView
 from mole.views.sidebar import MoleSidebar
 import batch_runner
+import batch_runner_juliet
 
 # Services
 config_service = ConfigService()
@@ -38,3 +39,6 @@ globals()["path_ctr"] = path_ctr
 
 # Initialize batch_runner with path_ctr
 batch_runner.init(path_ctr)
+
+# Initialize Juliet batch_runner with path_ctr
+batch_runner_juliet.init(path_ctr)

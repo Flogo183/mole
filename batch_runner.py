@@ -93,6 +93,87 @@ class LogCapture:
         return filtered
 
 
+def load_source_sink_mapping(json_path):
+    """
+    Load the JSON mapping file that defines which sources/sinks to use for each binary.
+
+    Args:
+        json_path: Path to the JSON mapping file
+
+    Returns:
+        dict: Mapping of binary names (without extension) to sources/sinks
+
+    Expected JSON format:
+    {
+      "binary_name_01": {
+        "sources": ["recv"],
+        "sinks": ["memcpy"]
+      },
+      "binary_name_02": {
+        "sources": ["fgets"],
+        "sinks": ["system"]
+      }
+    }
+    """
+    try:
+        with open(json_path, "r") as f:
+            mapping = json.load(f)
+        log.info(
+            "BatchRunner",
+            f"Loaded source/sink mapping for {len(mapping)} binaries from {json_path}",
+        )
+        return mapping
+    except FileNotFoundError:
+        log.error("BatchRunner", f"Mapping file not found: {json_path}")
+        return None
+    except json.JSONDecodeError as e:
+        log.error("BatchRunner", f"Invalid JSON in mapping file: {e}")
+        return None
+    except Exception as e:
+        log.error("BatchRunner", f"Error loading mapping file: {e}")
+        return None
+
+
+def apply_source_sink_filter(config_model, source_functions=None, sink_functions=None):
+    """
+    Disable all sources/sinks in the config, then enable only the specified ones.
+    This modifies the config_model in-place, just like Binary Ninja's UI does.
+
+    Args:
+        config_model: The ConfigModel to modify
+        source_functions: List of source function names to enable (e.g., ['recv', 'fread'])
+        sink_functions: List of sink function names to enable (e.g., ['memcpy', 'strcpy'])
+
+    Example:
+        apply_source_sink_filter(config_model, ['recv'], ['memcpy'])
+    """
+    # Get all functions using the same API that Binary Ninja UI uses
+    all_sources = config_model.get_functions(fun_type="Sources")
+    all_sinks = config_model.get_functions(fun_type="Sinks")
+
+    # Disable ALL sources
+    for func in all_sources:
+        func.enabled = False
+
+    # Disable ALL sinks
+    for func in all_sinks:
+        func.enabled = False
+
+    # Enable only the specified sources
+    if source_functions:
+        for func in all_sources:
+            if func.name in source_functions:
+                func.enabled = True
+                log.info("BatchRunner", f"Enabled source: {func.name}")
+
+    # Enable only the specified sinks
+    if sink_functions:
+        for func in all_sinks:
+            if func.name in sink_functions:
+                func.enabled = True
+                log.info("BatchRunner", f"Enabled sink: {func.name}")
+
+
 def init(path_ctr):
     """
     Initialize the batch runner with the shared path_ctr from the plugin.
@@ -104,10 +185,11 @@ def init(path_ctr):
         Background task for running batch analysis to avoid freezing the UI.
         """
 
-        def __init__(self, path_ctr):
+        def __init__(self, path_ctr, source_sink_mapping):
             super().__init__("Running batch analysis...", True)
             self.path_ctr = path_ctr
             self.log_capture = LogCapture()  # Initialize log capture
+            self.source_sink_mapping = source_sink_mapping
 
         def run(self):
             """
@@ -116,7 +198,7 @@ def init(path_ctr):
             # Hardcoded paths for now
             BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/CASTLE_repo/CASTLE-Benchmark/datasets/CASTLE-C250_binaries"
             OUTPUT_DIR = (
-                "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE_test"
+                "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE_test2"
             )
 
             os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -152,6 +234,61 @@ def init(path_ctr):
                 try:
                     # Initialize log capture variable
                     captured_logs = []
+
+                    # === CUSTOM CONFIG: Enable only specific sources/sinks for this binary ===
+                    # Look up source/sink mapping in JSON by filename (without extension)
+                    base_fname = os.path.splitext(fname)[0]  # Remove extension
+
+                    # Save the current enabled state of all functions (always save)
+                    config_model = self.path_ctr.config_ctr.config_model
+                    saved_states = {}
+
+                    # Save current state of all sources
+                    for func in config_model.get_functions(fun_type="Sources"):
+                        saved_states[("source", func.name)] = func.enabled
+
+                    # Save current state of all sinks
+                    for func in config_model.get_functions(fun_type="Sinks"):
+                        saved_states[("sink", func.name)] = func.enabled
+
+                    if base_fname in self.source_sink_mapping:
+                        # Found in JSON - use specific sources/sinks
+                        mapping = self.source_sink_mapping[base_fname]
+                        sources = mapping.get("sources", [])
+                        sinks = mapping.get("sinks", [])
+
+                        log.info(
+                            "BatchRunner",
+                            f"Found mapping for {base_fname} - Sources: {sources}, Sinks: {sinks}",
+                        )
+
+                        # Apply the filter (disable all, enable only specified)
+                        apply_source_sink_filter(config_model, sources, sinks)
+                        log.info(
+                            "BatchRunner", f"Applied source/sink filter for {fname}"
+                        )
+                    else:
+                        # Not found in JSON - enable ALL sources and ALL sinks
+                        log.info(
+                            "BatchRunner",
+                            f"No mapping found for {base_fname} in JSON - enabling ALL sources and sinks",
+                        )
+
+                        all_sources = config_model.get_functions(fun_type="Sources")
+                        all_sinks = config_model.get_functions(fun_type="Sinks")
+
+                        # Enable ALL sources
+                        for func in all_sources:
+                            func.enabled = True
+
+                        # Enable ALL sinks
+                        for func in all_sinks:
+                            func.enabled = True
+
+                        log.info(
+                            "BatchRunner",
+                            f"Enabled {len(all_sources)} sources and {len(all_sinks)} sinks for {fname}",
+                        )
 
                     # Attach the BinaryView so path_ctr works
                     self.path_ctr._bv = bv
@@ -448,6 +585,31 @@ def init(path_ctr):
                         pass
 
                 finally:
+                    # Restore original enabled/disabled states (always restore)
+                    try:
+                        if "saved_states" in locals() and saved_states:
+                            config_model = self.path_ctr.config_ctr.config_model
+
+                            # Restore sources
+                            for func in config_model.get_functions(fun_type="Sources"):
+                                key = ("source", func.name)
+                                if key in saved_states:
+                                    func.enabled = saved_states[key]
+
+                            # Restore sinks
+                            for func in config_model.get_functions(fun_type="Sinks"):
+                                key = ("sink", func.name)
+                                if key in saved_states:
+                                    func.enabled = saved_states[key]
+
+                            log.info(
+                                "BatchRunner", "Restored original source/sink states"
+                            )
+                    except Exception as e:
+                        log.warn(
+                            "BatchRunner", f"Could not restore original states: {e}"
+                        )
+
                     # Explicit cleanup
                     try:
                         if bv:
@@ -463,8 +625,32 @@ def init(path_ctr):
         """
         Start the batch runner as a background task.
         """
+        # Path to JSON mapping file
+        JSON_MAPPING_PATH = "/Users/flaviogottschalk/dev/BachelorArbeit/Source_Sink_mappings/castle_source_sink_mapping.json"
+
+        # Check if JSON file exists
+        if not os.path.exists(JSON_MAPPING_PATH):
+            log.error(
+                "BatchRunner", f"JSON mapping file not found: {JSON_MAPPING_PATH}"
+            )
+            log.error("BatchRunner", "Cannot proceed without source/sink mapping file")
+            from binaryninja import interaction
+
+            interaction.show_message_box(
+                "Missing Mapping File",
+                f"JSON mapping file not found:\n{JSON_MAPPING_PATH}\n\nPlease create the mapping file before running batch analysis.",
+                buttons=interaction.MessageBoxButtonSet.OKButtonSet,
+            )
+            return
+
+        # Load the source/sink mapping from JSON
+        source_sink_mapping = load_source_sink_mapping(JSON_MAPPING_PATH)
+        if not source_sink_mapping:
+            log.error("BatchRunner", "Failed to load source/sink mapping - aborting")
+            return
+
         log.info("BatchRunner", "Starting batch processing in background...")
-        task = BatchRunnerTask(path_ctr)
+        task = BatchRunnerTask(path_ctr, source_sink_mapping)
         task.start()
 
     # Register command in BN
