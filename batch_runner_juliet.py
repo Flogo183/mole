@@ -250,8 +250,12 @@ def init(path_ctr):
                 for func in config_model.get_functions(fun_type="Sinks"):
                     saved_states[("sink", func.name)] = func.enabled
 
-                if base_fname in self.source_sink_mapping:
-                    # Found in JSON - use specific sources/sinks
+                # Check if we're using JSON mapping mode (dict with entries) or enable-all mode (empty dict)
+                if (
+                    len(self.source_sink_mapping) > 0
+                    and base_fname in self.source_sink_mapping
+                ):
+                    # JSON mapping mode: Found specific mapping for this binary
                     mapping = self.source_sink_mapping[base_fname]
                     sources = mapping.get("sources", [])
                     sinks = mapping.get("sinks", [])
@@ -267,11 +271,17 @@ def init(path_ctr):
                         "JulietBatchRunner", f"Applied source/sink filter for {fname}"
                     )
                 else:
-                    # Not found in JSON - enable ALL sources and ALL sinks
-                    log.info(
-                        "JulietBatchRunner",
-                        f"No mapping found for {base_fname} in JSON - enabling ALL sources and sinks",
-                    )
+                    # Enable-all mode OR binary not found in JSON - enable ALL sources and ALL sinks
+                    if len(self.source_sink_mapping) == 0:
+                        log.info(
+                            "JulietBatchRunner",
+                            f"Enable-all mode: activating ALL sources and sinks for {fname}",
+                        )
+                    else:
+                        log.info(
+                            "JulietBatchRunner",
+                            f"No mapping found for {base_fname} in JSON - enabling ALL sources and sinks",
+                        )
 
                     all_sources = config_model.get_functions(fun_type="Sources")
                     all_sinks = config_model.get_functions(fun_type="Sinks")
@@ -614,9 +624,9 @@ def init(path_ctr):
             Only processes the CWE specified in self.target_cwe
             """
             # Hardcoded paths - adjust as needed
-            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/extracted_binaries"
+            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/extracted_binaries_no_w32"
             OUTPUT_BASE_DIR = (
-                "/Users/flaviogottschalk/dev/BachelorArbeit/results_Juliet_with_w32"
+                "/Users/flaviogottschalk/dev/BachelorArbeit/results_Juliet_for_mappings"
             )
 
             TARGET_CWE = self.target_cwe
@@ -788,22 +798,22 @@ def init(path_ctr):
         """
         # Hardcoded paths - adjust as needed
         BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/extracted_binaries_no_w32"
-        JSON_MAPPING_PATH = (
-            "/Users/flaviogottschalk/dev/BachelorArbeit/juliet_source_sink_mapping.json"
+
+        # Ask user to choose mode: JSON mapping or enable all
+        mode_choice = interaction.get_choice_input(
+            "Select Source/Sink Mode",
+            "choices",
+            [
+                "Use JSON mapping (per-binary filtering)",
+                "Enable ALL sources/sinks (comprehensive scan)",
+            ],
         )
 
-        # Load the source/sink mapping from JSON
-        source_sink_mapping = load_source_sink_mapping(JSON_MAPPING_PATH)
-        if not source_sink_mapping:
-            log.error(
-                "JulietBatchRunner", "Could not load source/sink mapping - aborting"
-            )
-            interaction.show_message_box(
-                "Mapping File Error",
-                f"Could not load source/sink mapping from:\n{JSON_MAPPING_PATH}\n\nPlease create the JSON mapping file first.",
-                buttons=interaction.MessageBoxButtonSet.OKButtonSet,
-            )
+        if mode_choice is None:
+            log.info("JulietBatchRunner", "User cancelled mode selection")
             return
+
+        use_json_mapping = mode_choice == 0
 
         # Scan for available CWEs across all Top folders
         available_cwes = set()
@@ -845,10 +855,36 @@ def init(path_ctr):
 
         selected_cwe = cwe_list[cwe_choice]
 
-        log.info(
-            "JulietBatchRunner",
-            f"Starting Juliet batch processing for {selected_cwe}...",
-        )
+        # Load JSON mapping only if user chose that mode
+        source_sink_mapping = None
+        if use_json_mapping:
+            # Build JSON mapping path based on selected CWE
+            # Example: CWE121 -> juliet_source_sink_mapping_CWE121.json
+            JSON_MAPPING_PATH = f"/Users/flaviogottschalk/dev/BachelorArbeit/Source_Sink_mappings/source_sink_mappings_juliet/Juliet{selected_cwe}_source_sink_mapping.json"
+
+            # Load the source/sink mapping from JSON
+            source_sink_mapping = load_source_sink_mapping(JSON_MAPPING_PATH)
+            if not source_sink_mapping:
+                log.error(
+                    "JulietBatchRunner", "Could not load source/sink mapping - aborting"
+                )
+                interaction.show_message_box(
+                    "Mapping File Error",
+                    f"Could not load source/sink mapping from:\n{JSON_MAPPING_PATH}\n\nPlease create the JSON mapping file first.",
+                    buttons=interaction.MessageBoxButtonSet.OKButtonSet,
+                )
+                return
+            log.info(
+                "JulietBatchRunner",
+                f"Starting Juliet batch processing for {selected_cwe} with JSON mapping...",
+            )
+        else:
+            # Use empty dict to signal "enable all" mode
+            source_sink_mapping = {}
+            log.info(
+                "JulietBatchRunner",
+                f"Starting Juliet batch processing for {selected_cwe} with ALL sources/sinks enabled...",
+            )
 
         task = JulietBatchRunnerTask(path_ctr, selected_cwe, source_sink_mapping)
         task.start()
