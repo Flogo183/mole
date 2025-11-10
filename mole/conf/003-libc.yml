@@ -451,7 +451,7 @@ sinks:
             par_cnt: i == 2
             par_slice: i == 1
           system:
-            symbols: [system, _system, __builtin_system]
+            symbols: [system, _system, __builtin_system, _wsystem]
             synopsis: int system(const char *command);
             enabled: true
             par_cnt: i == 1

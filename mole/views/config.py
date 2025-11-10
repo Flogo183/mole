@@ -77,6 +77,25 @@ class ConfigView(qtw.QWidget):
         """
         This method initializes the tabs `Sources` and `Sinks`.
         """
+        # Global Enable/Disable ALL buttons MODIFIED FLAVIO
+        enable_all_but = qtw.QPushButton(f"Enable ALL {tab_name}")
+        enable_all_but.clicked.connect(
+            lambda _, fun_type=tab_name: self.signal_check_functions.emit(
+                None, None, None, fun_type, True
+            )
+        )
+        disable_all_but = qtw.QPushButton(f"Disable ALL {tab_name}")
+        disable_all_but.clicked.connect(
+            lambda _, fun_type=tab_name: self.signal_check_functions.emit(
+                None, None, None, fun_type, False
+            )
+        )
+        global_but_lay = qtw.QHBoxLayout()
+        global_but_lay.addWidget(enable_all_but)
+        global_but_lay.addWidget(disable_all_but)
+        global_but_wid = qtw.QWidget()
+        global_but_wid.setLayout(global_but_lay)
+
         tab_wid = qtw.QTabWidget()
         for lib_name, lib in self.config_ctr.get_libraries(tab_name).items():
             lib_lay = qtw.QVBoxLayout()
@@ -149,6 +168,7 @@ class ConfigView(qtw.QWidget):
             scr_wid.setWidget(lib_wid)
             tab_wid.addTab(scr_wid, lib.name)
         lay = qtw.QVBoxLayout()
+        lay.addWidget(global_but_wid)
         lay.addWidget(tab_wid)
         wid = qtw.QWidget()
         wid.setLayout(lay)

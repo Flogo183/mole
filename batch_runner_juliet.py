@@ -161,17 +161,34 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
 
     # Enable only the specified sources
     if source_functions:
-        for func in all_sources:
-            if func.name in source_functions:
-                func.enabled = True
-                log.info("JulietBatchRunner", f"Enabled source: {func.name}")
+        available_sources = {func.name for func in all_sources}
+        for source_name in source_functions:
+            if source_name in available_sources:
+                for func in all_sources:
+                    if func.name == source_name:
+                        func.enabled = True
+                        log.info("JulietBatchRunner", f"Enabled source: {func.name}")
+                        break
+            else:
+                log.warn(
+                    "JulietBatchRunner",
+                    f"Source '{source_name}' not found in YAML configs",
+                )
 
     # Enable only the specified sinks
     if sink_functions:
-        for func in all_sinks:
-            if func.name in sink_functions:
-                func.enabled = True
-                log.info("JulietBatchRunner", f"Enabled sink: {func.name}")
+        available_sinks = {func.name for func in all_sinks}
+        for sink_name in sink_functions:
+            if sink_name in available_sinks:
+                for func in all_sinks:
+                    if func.name == sink_name:
+                        func.enabled = True
+                        log.info("JulietBatchRunner", f"Enabled sink: {func.name}")
+                        break
+            else:
+                log.warn(
+                    "JulietBatchRunner", f"Sink '{sink_name}' not found in YAML configs"
+                )
 
 
 def init(path_ctr):
@@ -210,6 +227,25 @@ def init(path_ctr):
             self.target_cwe = target_cwe
             self.source_sink_mapping = source_sink_mapping
 
+            # Save the ORIGINAL config state once at initialization
+            # This prevents state pollution between binaries
+            config_model = self.path_ctr.config_ctr.config_model
+            self.original_states = {}
+
+            # Save original state of all sources
+            for func in config_model.get_functions(fun_type="Sources"):
+                self.original_states[("source", func.name)] = func.enabled
+
+            # Save original state of all sinks
+            for func in config_model.get_functions(fun_type="Sinks"):
+                self.original_states[("sink", func.name)] = func.enabled
+
+            log.info(
+                "JulietBatchRunner",
+                f"Saved original state: {len([k for k in self.original_states.keys() if k[0] == 'source'])} sources, "
+                f"{len([k for k in self.original_states.keys() if k[0] == 'sink'])} sinks",
+            )
+
         def process_binary(self, fpath, fname, output_dir):
             """
             Process a single binary file.
@@ -235,40 +271,51 @@ def init(path_ctr):
                 captured_logs = []
 
                 # === CUSTOM CONFIG: Enable only specific sources/sinks for this binary ===
-                # Look up source/sink mapping in JSON by filename (without extension)
-                base_fname = os.path.splitext(fname)[0]  # Remove .bin extension
+                # Look up source/sink mapping in JSON by filename (keeping extension)
+                # Use fname directly (e.g., "CWE78_...bad.out")
 
-                # Save the current enabled state of all functions (always save)
+                # Get config model
                 config_model = self.path_ctr.config_ctr.config_model
-                saved_states = {}
-
-                # Save current state of all sources
-                for func in config_model.get_functions(fun_type="Sources"):
-                    saved_states[("source", func.name)] = func.enabled
-
-                # Save current state of all sinks
-                for func in config_model.get_functions(fun_type="Sinks"):
-                    saved_states[("sink", func.name)] = func.enabled
 
                 # Check if we're using JSON mapping mode (dict with entries) or enable-all mode (empty dict)
                 if (
                     len(self.source_sink_mapping) > 0
-                    and base_fname in self.source_sink_mapping
+                    and fname in self.source_sink_mapping
                 ):
                     # JSON mapping mode: Found specific mapping for this binary
-                    mapping = self.source_sink_mapping[base_fname]
+                    mapping = self.source_sink_mapping[fname]
                     sources = mapping.get("sources", [])
                     sinks = mapping.get("sinks", [])
 
                     log.info(
                         "JulietBatchRunner",
-                        f"Found mapping for {base_fname} - Sources: {sources}, Sinks: {sinks}",
+                        f"Found mapping for {fname} - Sources: {sources}, Sinks: {sinks}",
                     )
 
                     # Apply the filter (disable all, enable only specified)
                     apply_source_sink_filter(config_model, sources, sinks)
                     log.info(
                         "JulietBatchRunner", f"Applied source/sink filter for {fname}"
+                    )
+
+                    # DEBUG: Log what's actually enabled after filter
+                    enabled_sources = [
+                        f.name
+                        for f in config_model.get_functions(fun_type="Sources")
+                        if f.enabled
+                    ]
+                    enabled_sinks = [
+                        f.name
+                        for f in config_model.get_functions(fun_type="Sinks")
+                        if f.enabled
+                    ]
+                    log.info(
+                        "JulietBatchRunner",
+                        f"DEBUG - Actually enabled sources: {enabled_sources}",
+                    )
+                    log.info(
+                        "JulietBatchRunner",
+                        f"DEBUG - Actually enabled sinks: {enabled_sinks}",
                     )
                 else:
                     # Enable-all mode OR binary not found in JSON - enable ALL sources and ALL sinks
@@ -280,7 +327,7 @@ def init(path_ctr):
                     else:
                         log.info(
                             "JulietBatchRunner",
-                            f"No mapping found for {base_fname} in JSON - enabling ALL sources and sinks",
+                            f"No mapping found for {fname} in JSON - enabling ALL sources and sinks",
                         )
 
                     all_sources = config_model.get_functions(fun_type="Sources")
@@ -582,25 +629,26 @@ def init(path_ctr):
                 return False
 
             finally:
-                # Restore original enabled/disabled states (always restore)
+                # Restore ORIGINAL enabled/disabled states (always restore to original)
                 try:
-                    if "saved_states" in locals() and saved_states:
+                    if hasattr(self, "original_states") and self.original_states:
                         config_model = self.path_ctr.config_ctr.config_model
 
-                        # Restore sources
+                        # Restore sources to original state
                         for func in config_model.get_functions(fun_type="Sources"):
                             key = ("source", func.name)
-                            if key in saved_states:
-                                func.enabled = saved_states[key]
+                            if key in self.original_states:
+                                func.enabled = self.original_states[key]
 
-                        # Restore sinks
+                        # Restore sinks to original state
                         for func in config_model.get_functions(fun_type="Sinks"):
                             key = ("sink", func.name)
-                            if key in saved_states:
-                                func.enabled = saved_states[key]
+                            if key in self.original_states:
+                                func.enabled = self.original_states[key]
 
                         log.info(
-                            "JulietBatchRunner", "Restored original source/sink states"
+                            "JulietBatchRunner",
+                            "Restored to original source/sink states for next binary",
                         )
                 except Exception as e:
                     log.warn(
