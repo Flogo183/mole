@@ -666,16 +666,15 @@ def init(path_ctr):
         def run(self):
             """
             Run the Juliet batch processing in the background.
-            Processes the folder structure:
-            extracted_binaries/TopXX/CWEYYY/good|bad/*.bin
+            Supports two directory structures:
+            1. With Top folders: BASE_DIR/Top50/CWE121/good_versions/*.bin
+            2. Direct CWE folders: BASE_DIR/CWE121/good_versions/*.bin
 
             Only processes the CWE specified in self.target_cwe
             """
             # Hardcoded paths - adjust as needed
-            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/extracted_binaries_no_w32"
-            OUTPUT_BASE_DIR = (
-                "/Users/flaviogottschalk/dev/BachelorArbeit/results_Juliet_for_mappings"
-            )
+            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED/"
+            OUTPUT_BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_Juliet_for_CURATED_mappings"
 
             TARGET_CWE = self.target_cwe
 
@@ -688,48 +687,73 @@ def init(path_ctr):
 
             log.info("JulietBatchRunner", f"*** Processing only {TARGET_CWE} ***")
 
-            # Expected top-level folders: Top50, Top100, Top150
+            # Detect directory structure
+            # Check if we have Top50/Top100/Top150 folders or direct CWE folders
+            has_top_folders = False
             top_folders = ["Top50", "Top100", "Top150"]
+
+            for top_folder in top_folders:
+                if os.path.exists(os.path.join(BASE_DIR, top_folder)):
+                    has_top_folders = True
+                    break
+
+            # Check if target CWE exists directly in BASE_DIR
+            direct_cwe_path = os.path.join(BASE_DIR, TARGET_CWE)
+            has_direct_cwe = os.path.exists(direct_cwe_path)
+
+            if has_top_folders:
+                log.info(
+                    "JulietBatchRunner", "Detected Top50/Top100/Top150 folder structure"
+                )
+            elif has_direct_cwe:
+                log.info("JulietBatchRunner", "Detected direct CWE folder structure")
+            else:
+                log.error(
+                    "JulietBatchRunner",
+                    f"Could not find {TARGET_CWE} in either folder structure",
+                )
+                return
 
             total_binaries = 0
             processed_binaries = 0
 
+            # Build list of paths to process: [(top_folder_name, cwe_path)]
+            # top_folder_name can be None for direct structure
+            paths_to_process = []
+
+            if has_top_folders:
+                # Structure: Top50/CWE121/good_versions
+                for top_folder in top_folders:
+                    top_path = os.path.join(BASE_DIR, top_folder)
+                    if not os.path.exists(top_path):
+                        continue
+
+                    target_cwe_path = os.path.join(top_path, TARGET_CWE)
+                    if os.path.exists(target_cwe_path):
+                        paths_to_process.append((top_folder, target_cwe_path))
+                        log.info(
+                            "JulietBatchRunner", f"Found CWE path: {target_cwe_path}"
+                        )
+
+            if has_direct_cwe:
+                # Structure: CWE121/good_versions (no Top folder)
+                paths_to_process.append((None, direct_cwe_path))
+                log.info(
+                    "JulietBatchRunner", f"Found direct CWE path: {direct_cwe_path}"
+                )
+
             # First pass: count total binaries for progress tracking
-            for top_folder in top_folders:
-                top_path = os.path.join(BASE_DIR, top_folder)
-                if not os.path.exists(top_path):
-                    log.warn(
-                        "JulietBatchRunner", f"Skipping missing folder: {top_folder}"
-                    )
-                    continue
-
-                # Check if target CWE exists in this Top folder
-                target_cwe_path = os.path.join(top_path, TARGET_CWE)
-                if not os.path.exists(target_cwe_path):
-                    log.info(
-                        "JulietBatchRunner",
-                        f"CWE path does not exist: {target_cwe_path}",
-                    )
-                    continue
-
-                log.info("JulietBatchRunner", f"Found CWE path: {target_cwe_path}")
-
-                # Get all CWE folders (but filter to only TARGET_CWE)
-                cwe_folders = [TARGET_CWE]
-
-                for cwe_folder in cwe_folders:
-                    cwe_path = os.path.join(top_path, cwe_folder)
-
-                    # Check for good_versions and bad_versions subfolders
-                    for category in ["good_versions", "bad_versions"]:
-                        category_path = os.path.join(cwe_path, category)
-                        if os.path.exists(category_path):
-                            binaries = [
-                                f
-                                for f in os.listdir(category_path)
-                                if os.path.isfile(os.path.join(category_path, f))
-                            ]
-                            total_binaries += len(binaries)
+            for top_folder, cwe_path in paths_to_process:
+                # Check for good_versions and bad_versions subfolders
+                for category in ["good_versions", "bad_versions"]:
+                    category_path = os.path.join(cwe_path, category)
+                    if os.path.exists(category_path):
+                        binaries = [
+                            f
+                            for f in os.listdir(category_path)
+                            if os.path.isfile(os.path.join(category_path, f))
+                        ]
+                        total_binaries += len(binaries)
 
             log.info(
                 "JulietBatchRunner",
@@ -737,96 +761,84 @@ def init(path_ctr):
             )
 
             # Second pass: process all binaries
-            for top_folder in top_folders:
+            for top_folder, cwe_path in paths_to_process:
                 if self.cancelled:
                     log.info("JulietBatchRunner", "Batch processing cancelled by user")
                     break
 
-                top_path = os.path.join(BASE_DIR, top_folder)
-                if not os.path.exists(top_path):
-                    continue
+                # Create corresponding output folder structure
+                if top_folder:
+                    # With Top folder: OUTPUT_BASE_DIR/Top50/CWE121/
+                    output_cwe_dir = os.path.join(
+                        OUTPUT_BASE_DIR, top_folder, TARGET_CWE
+                    )
+                    log.info(
+                        "JulietBatchRunner", f"Processing {top_folder}/{TARGET_CWE}"
+                    )
+                else:
+                    # Direct: OUTPUT_BASE_DIR/CWE121/
+                    output_cwe_dir = os.path.join(OUTPUT_BASE_DIR, TARGET_CWE)
+                    log.info("JulietBatchRunner", f"Processing {TARGET_CWE}")
 
-                # Check if target CWE exists in this Top folder
-                target_cwe_path = os.path.join(top_path, TARGET_CWE)
-                if not os.path.exists(target_cwe_path):
-                    continue
+                os.makedirs(output_cwe_dir, exist_ok=True)
 
-                # Create corresponding output folder
-                output_top_dir = os.path.join(OUTPUT_BASE_DIR, top_folder)
-                os.makedirs(output_top_dir, exist_ok=True)
-
-                log.info("JulietBatchRunner", f"Processing {top_folder}/{TARGET_CWE}")
-
-                # Only process the target CWE
-                cwe_folders = [TARGET_CWE]
-
-                for cwe_folder in cwe_folders:
+                # Process both good_versions and bad_versions binaries
+                for category in ["good_versions", "bad_versions"]:
                     if self.cancelled:
                         break
 
-                    cwe_path = os.path.join(top_path, cwe_folder)
-                    output_cwe_dir = os.path.join(output_top_dir, cwe_folder)
-                    os.makedirs(output_cwe_dir, exist_ok=True)
+                    category_path = os.path.join(cwe_path, category)
+                    if not os.path.exists(category_path):
+                        log.warn(
+                            "JulietBatchRunner",
+                            f"Skipping missing {category} folder in {TARGET_CWE}",
+                        )
+                        continue
 
-                    log.info(
-                        "JulietBatchRunner", f"Processing {cwe_folder} in {top_folder}"
+                    # Create corresponding output folder
+                    output_category_dir = os.path.join(output_cwe_dir, category)
+                    os.makedirs(output_category_dir, exist_ok=True)
+
+                    # Get all binary files directly from category folder
+                    binaries = sorted(
+                        [
+                            f
+                            for f in os.listdir(category_path)
+                            if os.path.isfile(os.path.join(category_path, f))
+                        ]
                     )
 
-                    # Process both good_versions and bad_versions binaries
-                    for category in ["good_versions", "bad_versions"]:
+                    log.info(
+                        "JulietBatchRunner",
+                        f"Found {len(binaries)} {category} binaries in {TARGET_CWE}",
+                    )
+
+                    for fname in binaries:
                         if self.cancelled:
                             break
 
-                        category_path = os.path.join(cwe_path, category)
-                        if not os.path.exists(category_path):
+                        processed_binaries += 1
+
+                        if top_folder:
+                            self.progress = f"Processing {fname} ({processed_binaries}/{total_binaries}) - {top_folder}/{TARGET_CWE}/{category}"
+                        else:
+                            self.progress = f"Processing {fname} ({processed_binaries}/{total_binaries}) - {TARGET_CWE}/{category}"
+
+                        fpath = os.path.join(category_path, fname)
+
+                        # Process the binary
+                        success = self.process_binary(fpath, fname, output_category_dir)
+
+                        if success:
+                            log.info(
+                                "JulietBatchRunner",
+                                f"Successfully processed {fname} ({processed_binaries}/{total_binaries})",
+                            )
+                        else:
                             log.warn(
                                 "JulietBatchRunner",
-                                f"Skipping missing {category} folder in {cwe_folder}",
+                                f"Failed to process {fname} ({processed_binaries}/{total_binaries})",
                             )
-                            continue
-
-                        # Create corresponding output folder
-                        output_category_dir = os.path.join(output_cwe_dir, category)
-                        os.makedirs(output_category_dir, exist_ok=True)
-
-                        # Get all binary files directly from category folder
-                        binaries = sorted(
-                            [
-                                f
-                                for f in os.listdir(category_path)
-                                if os.path.isfile(os.path.join(category_path, f))
-                            ]
-                        )
-
-                        log.info(
-                            "JulietBatchRunner",
-                            f"Found {len(binaries)} {category} binaries in {cwe_folder}",
-                        )
-
-                        for fname in binaries:
-                            if self.cancelled:
-                                break
-
-                            processed_binaries += 1
-                            self.progress = f"Processing {fname} ({processed_binaries}/{total_binaries}) - {top_folder}/{cwe_folder}/{category}"
-
-                            fpath = os.path.join(category_path, fname)
-
-                            # Process the binary
-                            success = self.process_binary(
-                                fpath, fname, output_category_dir
-                            )
-
-                            if success:
-                                log.info(
-                                    "JulietBatchRunner",
-                                    f"Successfully processed {fname} ({processed_binaries}/{total_binaries})",
-                                )
-                            else:
-                                log.warn(
-                                    "JulietBatchRunner",
-                                    f"Failed to process {fname} ({processed_binaries}/{total_binaries})",
-                                )
 
             if not self.cancelled:
                 log.info(
@@ -845,7 +857,7 @@ def init(path_ctr):
         Shows a UI dialog to select which CWE to process.
         """
         # Hardcoded paths - adjust as needed
-        BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/extracted_binaries_no_w32"
+        BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED/"
 
         # Ask user to choose mode: JSON mapping or enable all
         mode_choice = interaction.get_choice_input(
@@ -863,10 +875,13 @@ def init(path_ctr):
 
         use_json_mapping = mode_choice == 0
 
-        # Scan for available CWEs across all Top folders
+        # Scan for available CWEs in both directory structures:
+        # 1. Top50/Top100/Top150 folders containing CWEs
+        # 2. Direct CWE folders in BASE_DIR
         available_cwes = set()
         top_folders = ["Top50", "Top100", "Top150"]
 
+        # Check for Top folder structure
         for top_folder in top_folders:
             top_path = os.path.join(BASE_DIR, top_folder)
             if os.path.exists(top_path):
@@ -875,10 +890,24 @@ def init(path_ctr):
                     for d in os.listdir(top_path)
                     if os.path.isdir(os.path.join(top_path, d)) and d.startswith("CWE")
                 ]
-                log.info(
-                    "JulietBatchRunner", f"Found CWEs in {top_folder}: {cwe_folders}"
-                )
-                available_cwes.update(cwe_folders)
+                if cwe_folders:
+                    log.info(
+                        "JulietBatchRunner",
+                        f"Found CWEs in {top_folder}: {cwe_folders}",
+                    )
+                    available_cwes.update(cwe_folders)
+
+        # Check for direct CWE folders in BASE_DIR
+        direct_cwe_folders = [
+            d
+            for d in os.listdir(BASE_DIR)
+            if os.path.isdir(os.path.join(BASE_DIR, d)) and d.startswith("CWE")
+        ]
+        if direct_cwe_folders:
+            log.info(
+                "JulietBatchRunner", f"Found direct CWE folders: {direct_cwe_folders}"
+            )
+            available_cwes.update(direct_cwe_folders)
 
         if not available_cwes:
             log.error("JulietBatchRunner", f"No CWE folders found in {BASE_DIR}")
@@ -908,7 +937,7 @@ def init(path_ctr):
         if use_json_mapping:
             # Build JSON mapping path based on selected CWE
             # Example: CWE121 -> juliet_source_sink_mapping_CWE121.json
-            JSON_MAPPING_PATH = f"/Users/flaviogottschalk/dev/BachelorArbeit/Source_Sink_mappings/source_sink_mappings_juliet/Juliet{selected_cwe}_source_sink_mapping.json"
+            JSON_MAPPING_PATH = f"/Users/flaviogottschalk/dev/BachelorArbeit/Source_Sink_mappings/Source_Sink_Mappings_CUT/Juliet{selected_cwe}_source_sink_mapping_CURATED.json"
 
             # Load the source/sink mapping from JSON
             source_sink_mapping = load_source_sink_mapping(JSON_MAPPING_PATH)

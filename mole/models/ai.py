@@ -58,7 +58,16 @@ class VulnerabilityClass(IndexedLabeledEnum):
         17,
         "Improper Neutralization of Special Elements in an LDAP Query (CWE-90)",
     )
-    OTHER = (18, "Other / Unknown")
+    UNEXPECTED_SIGN_EXTENSION = (
+        18,
+        "Unexpected Sign Extension (CWE-194)",
+    )
+    UNCONTROLLED_MEM_ALLOC = (
+        19,
+        "Memory Allocation with Excessive Size Value (CWE-789)",
+    )
+
+    OTHER = (20, "Other / Unknown")
 
 
 class VulnerabilityReport(BaseModel):
