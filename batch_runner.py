@@ -196,10 +196,8 @@ def init(path_ctr):
             Run the batch processing in the background.
             """
             # Hardcoded paths for now
-            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/CASTLE_repo/CASTLE-Benchmark/datasets/CASTLE-C250_binaries"
-            OUTPUT_DIR = (
-                "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE_test2"
-            )
+            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/CASTLE_repo/CASTLE-Benchmark/datasets/CASTLE-C250_binariesV2"
+            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE/results_CASTLE_model_gpt-5"
 
             os.makedirs(OUTPUT_DIR, exist_ok=True)
 
