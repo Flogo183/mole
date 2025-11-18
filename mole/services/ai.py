@@ -46,6 +46,9 @@ class AiService(BackgroundTask):
         max_turns: int,
         max_completion_tokens: int,
         temperature: float,
+        seed: Optional[
+            int
+        ] = None,  # FLAVIO: Added seed parameter for reproducible AI responses (None = random seed)
         initial_progress_text: str = "",
         can_cancel: bool = False,
     ) -> None:
@@ -63,6 +66,7 @@ class AiService(BackgroundTask):
         self._max_turns = max_turns
         self._max_completion_tokens = max_completion_tokens
         self._temperature = temperature
+        self._seed = seed  # FLAVIO: Store seed value for reproducible API calls (None=random, int=fixed)
         self._tools = [tool.to_dict() for tool in tools.values()]
         return
 
@@ -169,26 +173,72 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
         token_usage: Dict[str, int],
         custom_tag: str = tag,
     ) -> Optional[ParsedChatCompletionMessage]:
+        """FLAVIO: ADD a fallback for when the chosen AI model does not support structuered ouput"""
         """
         This method sends the given messages to the OpenAI client and returns the completion
         message.
         """
         message = None
         try:
-            # Send messages and receive completion message
-            completion = client.beta.chat.completions.parse(
-                messages=messages,
-                model=self._model,
-                tools=self._tools,
-                max_completion_tokens=self._max_completion_tokens,
-                temperature=self._temperature,
-                response_format=VulnerabilityReport,
-            )
-            message = completion.choices[0].message
+            # Try with structured output first
+            try:
+                completion = client.beta.chat.completions.parse(
+                    messages=messages,
+                    model=self._model,
+                    tools=self._tools,
+                    max_completion_tokens=self._max_completion_tokens,
+                    temperature=self._temperature,
+                    seed=self._seed,  # FLAVIO: Pass seed for reproducible responses across API calls
+                    response_format=VulnerabilityReport,
+                )
+                message = completion.choices[0].message
+            except Exception as structured_error:
+                # Fallback: Try without structured output for models that don't support it
+                log.warn(
+                    custom_tag,
+                    f"Structured output failed, falling back to regular completion: {str(structured_error)}",
+                )
+
+                # Add instruction to return JSON in the system message
+                modified_messages = list(messages)
+                for msg in modified_messages:
+                    if msg.get("role") == "system":
+                        msg["content"] += (
+                            "\n\nIMPORTANT: You MUST return your response as valid JSON matching this schema: "
+                            + str(VulnerabilityReport.model_json_schema())
+                        )
+                        break
+
+                completion = client.chat.completions.create(
+                    messages=modified_messages,
+                    model=self._model,
+                    tools=self._tools,
+                    max_tokens=self._max_completion_tokens,
+                    temperature=self._temperature,
+                    seed=self._seed,  # FLAVIO: Pass seed to fallback API call for reproducibility
+                )
+
+                # Manually parse JSON from content
+                raw_message = completion.choices[0].message
+                if raw_message.content:
+                    try:
+                        import json
+
+                        parsed_dict = json.loads(raw_message.content)
+                        raw_message.parsed = VulnerabilityReport(**parsed_dict)
+                    except json.JSONDecodeError as e:
+                        log.error(
+                            custom_tag, f"Failed to parse JSON response: {str(e)}"
+                        )
+                        raw_message.parsed = None
+                message = raw_message
+
+            # Extract token usage
             if completion.usage:
                 token_usage["prompt_tokens"] += completion.usage.prompt_tokens
                 token_usage["completion_tokens"] += completion.usage.completion_tokens
                 token_usage["total_tokens"] += completion.usage.total_tokens
+
         except Exception as e:
             log.error(custom_tag, f"Failed to send messages: {str(e):s}")
         return message
@@ -400,6 +450,10 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
         log.debug(tag, f"- max_completion_tokens: '{max_completion_tokens:s}'")
         temperature = f"{self._temperature:.1f}" if self._temperature else "None"
         log.debug(tag, f"- temperature          : '{temperature:s}'")
+        seed = (
+            f"{self._seed:d}" if self._seed is not None else "None (random)"
+        )  # FLAVIO: Log seed value for debugging
+        log.debug(tag, f"- seed                 : '{seed:s}'")
         # Analyze paths using AI
         with futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             # Submit tasks

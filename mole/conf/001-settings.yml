@@ -23,30 +23,30 @@ settings:
     help: color used to highlight instructions originating from slicing a source function
     value: Orange
     items:
-    - Blue
-    - Green
-    - Cyan
-    - Red
-    - Magenta
-    - Yellow
-    - Orange
+      - Blue
+      - Green
+      - Cyan
+      - Red
+      - Magenta
+      - Yellow
+      - Orange
   snk_highlight_color:
     help: color used to highlight instructions originating from slicing a sink function
     value: Red
     items:
-    - Blue
-    - Green
-    - Cyan
-    - Red
-    - Magenta
-    - Yellow
-    - Orange
+      - Blue
+      - Green
+      - Cyan
+      - Red
+      - Magenta
+      - Yellow
+      - Orange
   path_grouping:
     help: strategy used to group paths
     value: Call Graph
   openai_base_url:
     help: OpenAI API base URL
-    value: "https://api.openai.com/v1"
+    value: "https://openrouter.ai/api/v1"
   openai_api_key:
     help: OpenAI API key
     value: ""
@@ -68,3 +68,8 @@ settings:
     value: 1.0
     min_value: 0.0
     max_value: 2.0
+  seed:
+    help: random seed for reproducible AI responses (null for random, integer for fixed)
+    value: null
+    min_value: 0
+    max_value: 2147483647

@@ -75,6 +75,10 @@ class AiController:
             temperature = float(temperature_setting.value)
             if temperature < 0.0 or temperature > 2.0:
                 temperature = None
+        seed = None  # FLAVIO: Get seed from config for reproducible AI responses
+        seed_setting = self.config_ctr.get_setting("seed")
+        if seed_setting and seed_setting.value is not None:
+            seed = int(seed_setting.value)
         # Initialize and start AI service
         ai_service = AiService(
             bv=bv,
@@ -87,6 +91,7 @@ class AiController:
             max_turns=max_turns,
             max_completion_tokens=max_completion_tokens,
             temperature=temperature,
+            seed=seed,  # FLAVIO: Pass seed to AI service for reproducible responses
             initial_progress_text="Mole analyzes paths...",
             can_cancel=True,
         )

@@ -82,6 +82,7 @@ class ConfigService:
                 "max_memory_slice_depth",
                 "max_turns",
                 "max_completion_tokens",
+                "seed",  # FLAVIO: Added seed to parsed settings for reproducible AI responses
             ]:
                 setting: Dict = settings.get(name, None)
                 if not setting:
@@ -89,7 +90,11 @@ class ConfigService:
                 try:
                     min_value = int(setting["min_value"])
                     max_value = int(setting["max_value"])
-                    value = min(max(setting["value"], min_value), max_value)
+                    # FLAVIO: Handle null values for seed setting (null means random)
+                    if name == "seed" and setting["value"] is None:
+                        value = None
+                    else:
+                        value = min(max(setting["value"], min_value), max_value)
                     help = setting["help"]
                 except KeyError as e:
                     log.warn(
@@ -116,9 +121,13 @@ class ConfigService:
                 if not setting:
                     continue
                 try:
-                    min_value = float(setting["min_value"])
-                    max_value = float(setting["max_value"])
-                    value = min(max(setting["value"], min_value), max_value)
+                    min_value = int(setting["min_value"])
+                    max_value = int(setting["max_value"])
+                    # FLAVIO: Handle null values for seed setting (null means random)
+                    if name == "seed" and setting["value"] is None:
+                        value = None
+                    else:
+                        value = min(max(setting["value"], min_value), max_value)
                     help = setting["help"]
                 except KeyError as e:
                     log.warn(

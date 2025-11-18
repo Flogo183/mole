@@ -301,6 +301,42 @@ class ConfigView(qtw.QWidget):
             )
             aia_lay.addWidget(setting.widget, row_cnt, 1)
             row_cnt += 1
+        # FLAVIO: Add seed control for reproducible AI responses
+        for name in ["seed"]:
+            setting: SpinboxSetting = self.config_ctr.get_setting(name)
+            if not setting:
+                continue
+            # Checkbox to enable/disable fixed seed
+            setting_chk = qtw.QCheckBox(f"Use Fixed {name:s}:")
+            setting_chk.setToolTip(f"{setting.help:s} (uncheck for random responses)")
+            aia_lay.addWidget(setting_chk, row_cnt, 0)
+            # Spinbox for seed value
+            setting.widget = qtw.QSpinBox()
+            setting.widget.setRange(setting.min_value, setting.max_value)
+            setting.widget.setValue(setting.value if setting.value is not None else 42)
+            setting.widget.setToolTip(setting.help)
+            setting.widget.setEnabled(setting.value is not None)
+
+            # Connect checkbox to enable/disable spinbox
+            def on_seed_checkbox_changed(checked, spinbox=setting.widget):
+                spinbox.setEnabled(checked)
+                if checked:
+                    self.signal_change_setting.emit(name, spinbox.value())
+                else:
+                    self.signal_change_setting.emit(name, None)
+
+            setting_chk.setChecked(setting.value is not None)
+            setting_chk.stateChanged.connect(on_seed_checkbox_changed)
+            # Connect spinbox to update setting when enabled
+            setting.widget.valueChanged.connect(
+                lambda value, name=name, chk=setting_chk: (
+                    self.signal_change_setting.emit(name, value)
+                    if chk.isChecked()
+                    else None
+                )
+            )
+            aia_lay.addWidget(setting.widget, row_cnt, 1)
+            row_cnt += 1
         # Analyzing widget
         aia_wid = qtw.QGroupBox("Analyzing Path with AI:")
         aia_wid.setLayout(aia_lay)

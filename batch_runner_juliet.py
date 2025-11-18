@@ -530,6 +530,33 @@ def init(path_ctr):
 
                 log.info("JulietBatchRunner", f"AI analysis completed for {fname}")
 
+                # Check captured logs for AI analysis errors
+                ai_errors = {}
+                for log_entry in captured_logs:
+                    msg = log_entry.get("message", "")
+                    module = log_entry.get("module", "")
+
+                    # Check for AI analysis failures
+                    if module == "Mole.AI" and (
+                        "Failed to send messages" in msg
+                        or "No response received" in msg
+                    ):
+                        # Extract path ID from message like "[Path:1]"
+                        import re
+
+                        path_match = re.search(r"\[Path:(\d+)\]", msg)
+                        if path_match:
+                            path_id = int(path_match.group(1))
+                            if path_id not in ai_errors:
+                                ai_errors[path_id] = []
+                            ai_errors[path_id].append(
+                                {
+                                    "level": log_entry.get("level"),
+                                    "message": msg,
+                                    "timestamp": log_entry.get("timestamp"),
+                                }
+                            )
+
                 # Collect results with simplified output
                 results = []
                 for pid in path_ids:
@@ -556,6 +583,30 @@ def init(path_ctr):
                                 "parameter_index": path.snk_par_idx,
                             },
                             "comment": path.comment if path.comment else None,
+                        }
+
+                        # Calculate path structural complexity metrics
+                        import math
+
+                        num_instructions = (
+                            len(path.insts) if hasattr(path, "insts") else 0
+                        )
+                        num_phi_calls = len(path.phiis) if hasattr(path, "phiis") else 0
+                        num_branches = len(path.bdeps) if hasattr(path, "bdeps") else 0
+
+                        # Composite metric: D = 0.6*log(1+B) + 0.3*log(1+Φ) + 0.1*log(1+I)
+                        # B = branches, Φ = phi calls, I = instructions
+                        complexity_score = (
+                            0.5 * math.log(1 + num_branches)
+                            + 0.3 * math.log(1 + num_phi_calls)
+                            + 0.2 * math.log(1 + num_instructions)
+                        )
+
+                        simplified_data["path_complexity"] = {
+                            "instructions": num_instructions,
+                            "phi_calls": num_phi_calls,
+                            "branches": num_branches,
+                            "structural_complexity_score": round(complexity_score, 4),
                         }
 
                         # Include AI report if available
@@ -590,6 +641,12 @@ def init(path_ctr):
                             simplified_data["ai_report"] = ai_data
                         else:
                             simplified_data["ai_report"] = None
+
+                        # Include AI analysis errors if any occurred for this path
+                        if pid in ai_errors:
+                            simplified_data["ai_analysis_errors"] = ai_errors[pid]
+                        else:
+                            simplified_data["ai_analysis_errors"] = None
 
                         results.append(simplified_data)
                     except Exception as e:
@@ -673,7 +730,7 @@ def init(path_ctr):
             Only processes the CWE specified in self.target_cwe
             """
             # Hardcoded paths - adjust as needed
-            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED/"
+            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED"
             OUTPUT_BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_Juliet_for_CURATED_mappings"
 
             TARGET_CWE = self.target_cwe
@@ -857,7 +914,7 @@ def init(path_ctr):
         Shows a UI dialog to select which CWE to process.
         """
         # Hardcoded paths - adjust as needed
-        BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED/"
+        BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED"
 
         # Ask user to choose mode: JSON mapping or enable all
         mode_choice = interaction.get_choice_input(
