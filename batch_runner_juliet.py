@@ -729,6 +729,11 @@ def init(path_ctr):
 
             Only processes the CWE specified in self.target_cwe
             """
+            # FLAVIO: Track execution time and statistics for performance analysis
+            batch_start_time = time.time()
+            binary_timings = []  # Store (binary_name, elapsed_seconds, num_paths) for each binary
+            total_paths_found = 0
+
             # Hardcoded paths - adjust as needed
             BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED"
             OUTPUT_BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_Juliet_for_CURATED_mappings"
@@ -883,8 +888,34 @@ def init(path_ctr):
 
                         fpath = os.path.join(category_path, fname)
 
+                        # FLAVIO: Track per-binary timing
+                        binary_start_time = time.time()
+
                         # Process the binary
                         success = self.process_binary(fpath, fname, output_category_dir)
+
+                        # FLAVIO: Record timing and path count for this binary
+                        binary_elapsed = time.time() - binary_start_time
+
+                        # Count paths by reading the JSON output file
+                        num_paths = 0
+                        try:
+                            json_file = os.path.join(
+                                output_category_dir, f"{fname}.json"
+                            )
+                            if os.path.exists(json_file):
+                                with open(json_file, "r") as f:
+                                    paths_data = json.load(f)
+                                    num_paths = (
+                                        len(paths_data)
+                                        if isinstance(paths_data, list)
+                                        else 0
+                                    )
+                                    total_paths_found += num_paths
+                        except Exception:
+                            pass
+
+                        binary_timings.append((fname, binary_elapsed, num_paths))
 
                         if success:
                             log.info(
@@ -897,15 +928,72 @@ def init(path_ctr):
                                 f"Failed to process {fname} ({processed_binaries}/{total_binaries})",
                             )
 
+            # FLAVIO: Calculate and save execution statistics
+            batch_end_time = time.time()
+            elapsed_seconds = batch_end_time - batch_start_time
+            elapsed_minutes = elapsed_seconds / 60
+            elapsed_hours = elapsed_minutes / 60
+
+            # Calculate statistics
+            avg_time_per_binary = (
+                elapsed_seconds / processed_binaries if processed_binaries > 0 else 0
+            )
+            longest_binary = (
+                max(binary_timings, key=lambda x: x[1])
+                if binary_timings
+                else (None, 0, 0)
+            )
+            avg_paths_per_binary = (
+                total_paths_found / processed_binaries if processed_binaries > 0 else 0
+            )
+
+            time_str = f"{elapsed_seconds:.2f}s"
+            if elapsed_seconds >= 60:
+                time_str = f"{elapsed_minutes:.2f}m ({elapsed_seconds:.2f}s)"
+            if elapsed_minutes >= 60:
+                time_str = f"{elapsed_hours:.2f}h ({elapsed_minutes:.2f}m)"
+
+            # FLAVIO: Create summary statistics JSON
+            summary = {
+                "cwe": TARGET_CWE,
+                "total_binaries_processed": processed_binaries,
+                "total_binaries_found": total_binaries,
+                "total_paths_found": total_paths_found,
+                "total_execution_time_seconds": round(elapsed_seconds, 2),
+                "total_execution_time_formatted": time_str,
+                "average_time_per_binary_seconds": round(avg_time_per_binary, 2),
+                "average_paths_per_binary": round(avg_paths_per_binary, 2),
+                "longest_binary": {
+                    "name": longest_binary[0],
+                    "time_seconds": round(longest_binary[1], 2),
+                    "num_paths": longest_binary[2],
+                }
+                if longest_binary[0]
+                else None,
+                "cancelled": self.cancelled,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            # Save summary to output directory
+            summary_file = os.path.join(
+                OUTPUT_BASE_DIR, f"{TARGET_CWE}_batch_summary.json"
+            )
+            try:
+                with open(summary_file, "w") as f:
+                    json.dump(summary, f, indent=2)
+                log.info("JulietBatchRunner", f"Saved batch summary to {summary_file}")
+            except Exception as e:
+                log.error("JulietBatchRunner", f"Failed to save summary: {e}")
+
             if not self.cancelled:
                 log.info(
                     "JulietBatchRunner",
-                    f"{TARGET_CWE} batch processing completed! Processed {processed_binaries}/{total_binaries} binaries",
+                    f"{TARGET_CWE} batch processing completed! Processed {processed_binaries}/{total_binaries} binaries, found {total_paths_found} paths in {time_str}",
                 )
             else:
                 log.info(
                     "JulietBatchRunner",
-                    f"{TARGET_CWE} batch processing cancelled. Processed {processed_binaries}/{total_binaries} binaries",
+                    f"{TARGET_CWE} batch processing cancelled. Processed {processed_binaries}/{total_binaries} binaries, found {total_paths_found} paths in {time_str}",
                 )
 
     def run_juliet_batch(bv=None):

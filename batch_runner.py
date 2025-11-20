@@ -195,9 +195,15 @@ def init(path_ctr):
             """
             Run the batch processing in the background.
             """
+            # FLAVIO: Track execution time and statistics for performance analysis
+            batch_start_time = time.time()
+            binary_timings = []  # Store (binary_name, elapsed_seconds, num_paths) for each binary
+            total_paths_found = 0
+            processed_binaries = 0
+
             # Hardcoded paths for now
             BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/CASTLE_repo/CASTLE-Benchmark/datasets/CASTLE-C250_binariesV2"
-            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE/results_CASTLE_model_o4-mini_run2"
+            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE/results_CASTLE_model_claude-sonnet-4.5_run3"
 
             os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -215,6 +221,9 @@ def init(path_ctr):
 
                 self.progress = f"Processing {fname} ({i + 1}/{total_files})"
                 fpath = os.path.join(BINARIES_DIR, fname)
+
+                # FLAVIO: Track per-binary timing
+                binary_start_time = time.time()
 
                 log.info("BatchRunner", f"Processing {fname} ({i + 1}/{total_files})")
 
@@ -628,6 +637,13 @@ def init(path_ctr):
                         "BatchRunner", f"Saved {len(results)} path(s) to {out_file}"
                     )
 
+                    # FLAVIO: Track timing and path count for this binary
+                    binary_elapsed = time.time() - binary_start_time
+                    num_paths = len(results)
+                    total_paths_found += num_paths
+                    binary_timings.append((fname, binary_elapsed, num_paths))
+                    processed_binaries += 1
+
                     # Clear paths after saving to prevent merging with next binary
                     if self.path_ctr.path_tree_view:
                         cleared_count = self.path_ctr.path_tree_view.clear_all_paths()
@@ -679,8 +695,66 @@ def init(path_ctr):
                     except Exception as e:
                         log.error("BatchRunner", f"Error closing {fname}: {e}")
 
+            # FLAVIO: Calculate and save execution statistics
+            batch_end_time = time.time()
+            elapsed_seconds = batch_end_time - batch_start_time
+            elapsed_minutes = elapsed_seconds / 60
+            elapsed_hours = elapsed_minutes / 60
+
+            # Calculate statistics
+            avg_time_per_binary = (
+                elapsed_seconds / processed_binaries if processed_binaries > 0 else 0
+            )
+            longest_binary = (
+                max(binary_timings, key=lambda x: x[1])
+                if binary_timings
+                else (None, 0, 0)
+            )
+            avg_paths_per_binary = (
+                total_paths_found / processed_binaries if processed_binaries > 0 else 0
+            )
+
+            time_str = f"{elapsed_seconds:.2f}s"
+            if elapsed_seconds >= 60:
+                time_str = f"{elapsed_minutes:.2f}m ({elapsed_seconds:.2f}s)"
+            if elapsed_minutes >= 60:
+                time_str = f"{elapsed_hours:.2f}h ({elapsed_minutes:.2f}m)"
+
+            # FLAVIO: Create summary statistics JSON
+            summary = {
+                "dataset": "CASTLE",
+                "total_binaries_processed": processed_binaries,
+                "total_binaries_found": total_files,
+                "total_paths_found": total_paths_found,
+                "total_execution_time_seconds": round(elapsed_seconds, 2),
+                "total_execution_time_formatted": time_str,
+                "average_time_per_binary_seconds": round(avg_time_per_binary, 2),
+                "average_paths_per_binary": round(avg_paths_per_binary, 2),
+                "longest_binary": {
+                    "name": longest_binary[0],
+                    "time_seconds": round(longest_binary[1], 2),
+                    "num_paths": longest_binary[2],
+                }
+                if longest_binary[0]
+                else None,
+                "cancelled": self.cancelled,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            # Save summary to output directory
+            summary_file = os.path.join(OUTPUT_DIR, "batch_summary.json")
+            try:
+                with open(summary_file, "w") as f:
+                    json.dump(summary, f, indent=2)
+                log.info("BatchRunner", f"Saved batch summary to {summary_file}")
+            except Exception as e:
+                log.error("BatchRunner", f"Failed to save summary: {e}")
+
             if not self.cancelled:
-                log.info("BatchRunner", "Batch processing completed!")
+                log.info(
+                    "BatchRunner",
+                    f"Batch processing completed! Processed {processed_binaries}/{total_files} binaries, found {total_paths_found} paths in {time_str}",
+                )
 
     def run_batch(bv=None):
         """

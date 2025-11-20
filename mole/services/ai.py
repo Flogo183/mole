@@ -180,32 +180,48 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
         """
         message = None
         try:
-            # Try with structured output first
-            try:
-                completion = client.beta.chat.completions.parse(
-                    messages=messages,
-                    model=self._model,
-                    tools=self._tools,
-                    max_completion_tokens=self._max_completion_tokens,
-                    temperature=self._temperature,
-                    seed=self._seed,  # FLAVIO: Pass seed for reproducible responses across API calls
-                    response_format=VulnerabilityReport,
-                )
-                message = completion.choices[0].message
-            except Exception as structured_error:
-                # Fallback: Try without structured output for models that don't support it
-                log.warn(
-                    custom_tag,
-                    f"Structured output failed, falling back to regular completion: {str(structured_error)}",
-                )
+            # FLAVIO: Detect if model supports structured output with tools
+            # Gemini models cannot use function calling with structured JSON output
+            use_structured_output = "gemini" not in self._model.lower()
 
-                # Add instruction to return JSON in the system message
+            # Try with structured output first (if supported)
+            if use_structured_output:
+                try:
+                    completion = client.beta.chat.completions.parse(
+                        messages=messages,
+                        model=self._model,
+                        tools=self._tools,
+                        max_completion_tokens=self._max_completion_tokens,
+                        temperature=self._temperature,
+                        seed=self._seed,  # FLAVIO: Pass seed for reproducible responses across API calls
+                        response_format=VulnerabilityReport,
+                    )
+                    message = completion.choices[0].message
+                except Exception as structured_error:
+                    # Fallback: Try without structured output for models that don't support it
+                    log.warn(
+                        custom_tag,
+                        f"Structured output failed, falling back to regular completion: {str(structured_error)}",
+                    )
+                    use_structured_output = False
+
+            # Use regular completion (no structured output)
+            if not use_structured_output or message is None:
+                # FLAVIO: Add strong JSON formatting instruction for non-structured-output models
                 modified_messages = list(messages)
                 for msg in modified_messages:
                     if msg.get("role") == "system":
                         msg["content"] += (
-                            "\n\nIMPORTANT: You MUST return your response as valid JSON matching this schema: "
+                            "\n\n=== CRITICAL OUTPUT FORMAT REQUIREMENT ===\n"
+                            "When you have completed your analysis and used all necessary tools, "
+                            "you MUST return your final response as ONLY valid JSON with no additional text before or after. "
+                            "Do NOT provide explanations outside the JSON structure.\n\n"
+                            "Your response must be a single JSON object matching this exact schema:\n"
                             + str(VulnerabilityReport.model_json_schema())
+                            + "\n\nExample format:\n"
+                            '{"truePositive": true, "vulnerabilityClass": "Buffer Overflow", '
+                            '"shortExplanation": "...", "severityLevel": "Critical", "inputExample": "..."}\n'
+                            "Return ONLY the JSON object, nothing else."
                         )
                         break
 
@@ -230,7 +246,20 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                         log.error(
                             custom_tag, f"Failed to parse JSON response: {str(e)}"
                         )
+                        # FLAVIO: Debug logging for Gemini response issues
+                        log.debug(
+                            custom_tag,
+                            f"Content preview: {raw_message.content[:200] if raw_message.content else 'None'}...",
+                        )
                         raw_message.parsed = None
+                else:
+                    # FLAVIO: Log when content is empty
+                    log.warn(
+                        custom_tag,
+                        f"Response has no content. Tool calls: {raw_message.tool_calls is not None}, "
+                        f"Refusal: {getattr(raw_message, 'refusal', None)}",
+                    )
+                    raw_message.parsed = None
                 message = raw_message
 
             # Extract token usage
