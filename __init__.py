@@ -14,6 +14,7 @@ if "pytest" not in sys.modules:
     from mole.views.sidebar import MoleSidebar
     import batch_runner
     import batch_runner_juliet
+    import batch_runner_primevul
 
     # Services
     config_service = ConfigService()
@@ -46,3 +47,6 @@ if "pytest" not in sys.modules:
 
     # Initialize Juliet batch_runner with path_ctr
     batch_runner_juliet.init(path_ctr)
+
+    # Initialize PrimeVul runner
+    batch_runner_primevul.init(path_ctr)

@@ -180,32 +180,55 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
         """
         message = None
         try:
-            # FLAVIO: Detect if model supports structured output with tools
-            # Gemini models cannot use function calling with structured JSON output
+            # FLAVIO: Changed from OpenAI beta.parse() to OpenRouter standard format
+            # Try structured output first, but skip for Gemini (doesn't support it with tools)
             use_structured_output = "gemini" not in self._model.lower()
 
-            # Try with structured output first (if supported)
+            # Try with structured output first
             if use_structured_output:
                 try:
-                    completion = client.beta.chat.completions.parse(
+                    # FLAVIO: Using OpenRouter standard format instead of OpenAI beta API
+                    # OpenRouter expects: response_format={"type": "json_schema", "json_schema": {...}}
+                    # NOT: response_format=PydanticModel (OpenAI beta feature)
+                    completion = client.chat.completions.create(
                         messages=messages,
                         model=self._model,
                         tools=self._tools,
-                        max_completion_tokens=self._max_completion_tokens,
+                        max_tokens=self._max_completion_tokens,
                         temperature=self._temperature,
-                        seed=self._seed,  # FLAVIO: Pass seed for reproducible responses across API calls
-                        response_format=VulnerabilityReport,
+                        seed=self._seed,
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "vulnerability_report",
+                                "strict": True,
+                                "schema": VulnerabilityReport.model_json_schema(),
+                            },
+                        },
                     )
-                    message = completion.choices[0].message
-                except Exception as structured_error:
-                    # Fallback: Try without structured output for models that don't support it
-                    log.warn(
+
+                    # FLAVIO: OpenRouter returns JSON string in content, not parsed object
+                    # Must manually parse with json.loads() and instantiate Pydantic model
+                    raw_message = completion.choices[0].message
+                    if raw_message.content and raw_message.content.strip():
+                        parsed_dict = json.loads(raw_message.content.strip())
+                        raw_message.parsed = VulnerabilityReport(**parsed_dict)
+                    message = raw_message
+                    log.info(
                         custom_tag,
-                        f"Structured output failed, falling back to regular completion: {str(structured_error)}",
+                        f"Using structured output (OpenRouter format) for '{self._model}'",
                     )
+
+                except Exception as structured_error:
+                    log.error(
+                        custom_tag, f"Structured output failed: {structured_error}"
+                    )
+                    # FLAVIO: Fall back to prompt-based approach for models with limitations
+                    # (Gemini with tools, Qwen requirements, provider incompatibilities)
                     use_structured_output = False
 
-            # Use regular completion (no structured output)
+            # FLAVIO: Fallback approach - use strong JSON prompts + regex extraction
+            # Works for: Gemini, Qwen, Llama, and other models with structured output limitations
             if not use_structured_output or message is None:
                 # FLAVIO: Add strong JSON formatting instruction for non-structured-output models
                 modified_messages = list(messages)
@@ -238,10 +261,32 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                 raw_message = completion.choices[0].message
                 if raw_message.content:
                     try:
-                        import json
+                        import re
 
-                        parsed_dict = json.loads(raw_message.content)
+                        content = raw_message.content.strip()
+
+                        # FLAVIO: Try to extract JSON if wrapped in text (common with Gemini)
+                        # First, try direct parsing
+                        try:
+                            parsed_dict = json.loads(content)
+                        except json.JSONDecodeError:
+                            # If that fails, try to find JSON object in the text
+                            # Look for content between first { and last }
+                            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+                            if json_match:
+                                json_str = json_match.group(0)
+                                log.info(
+                                    custom_tag,
+                                    f"Extracted JSON from text response (length: {len(json_str)} chars)",
+                                )
+                                parsed_dict = json.loads(json_str)
+                            else:
+                                raise json.JSONDecodeError(
+                                    "No JSON object found in response", content, 0
+                                )
+
                         raw_message.parsed = VulnerabilityReport(**parsed_dict)
+
                     except json.JSONDecodeError as e:
                         log.error(
                             custom_tag, f"Failed to parse JSON response: {str(e)}"
@@ -250,6 +295,12 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                         log.debug(
                             custom_tag,
                             f"Content preview: {raw_message.content[:200] if raw_message.content else 'None'}...",
+                        )
+                        raw_message.parsed = None
+                    except Exception as e:
+                        log.error(
+                            custom_tag,
+                            f"Failed to create VulnerabilityReport: {str(e)}",
                         )
                         raw_message.parsed = None
                 else:
@@ -281,7 +332,19 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
         """
         result = None
         try:
-            args = json.loads(func_args)
+            # FLAVIO: Defensive JSON parsing - some models return malformed arguments
+            # (e.g., openai/gpt-oss-120b returns args without opening/closing braces)
+            func_args_cleaned = func_args.strip()
+
+            # If arguments don't start with {, add it
+            if func_args_cleaned and not func_args_cleaned.startswith("{"):
+                func_args_cleaned = "{" + func_args_cleaned
+
+            # If arguments don't end with }, add it
+            if func_args_cleaned and not func_args_cleaned.endswith("}"):
+                func_args_cleaned = func_args_cleaned + "}"
+
+            args = json.loads(func_args_cleaned)
             args["bv"] = self._bv
             args["tag"] = custom_tag
             result = tools[func_name].handler(**args)

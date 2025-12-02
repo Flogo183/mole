@@ -101,17 +101,17 @@ def load_source_sink_mapping(json_path):
         json_path: Path to the JSON mapping file
 
     Returns:
-        dict: Mapping of binary names (without extension) to sources/sinks
+        dict: Mapping of binary names to sources/sinks
 
     Expected JSON format:
     {
-      "CWE121_test_01": {
-        "sources": ["gets"],
-        "sinks": ["memcpy"]
+      "binary1": {
+        "sources": ["filename", "fread"],
+        "sinks": ["system", "malloc"]
       },
-      "CWE78_test_02": {
-        "sources": ["recv"],
-        "sinks": ["system"]
+      "binary2": {
+        "sources": ["user_input"],
+        "sinks": ["strcpy"]
       }
     }
     """
@@ -119,18 +119,18 @@ def load_source_sink_mapping(json_path):
         with open(json_path, "r") as f:
             mapping = json.load(f)
         log.info(
-            "JulietBatchRunner",
+            "PrimeVulBatchRunner",
             f"Loaded source/sink mapping for {len(mapping)} binaries from {json_path}",
         )
         return mapping
     except FileNotFoundError:
-        log.error("JulietBatchRunner", f"Mapping file not found: {json_path}")
+        log.error("PrimeVulBatchRunner", f"Mapping file not found: {json_path}")
         return None
     except json.JSONDecodeError as e:
-        log.error("JulietBatchRunner", f"Invalid JSON in mapping file: {e}")
+        log.error("PrimeVulBatchRunner", f"Invalid JSON in mapping file: {e}")
         return None
     except Exception as e:
-        log.error("JulietBatchRunner", f"Error loading mapping file: {e}")
+        log.error("PrimeVulBatchRunner", f"Error loading mapping file: {e}")
         return None
 
 
@@ -141,11 +141,11 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
 
     Args:
         config_model: The ConfigModel to modify
-        source_functions: List of source function names to enable (e.g., ['gets', 'fread'])
-        sink_functions: List of sink function names to enable (e.g., ['memcpy', 'strcpy'])
+        source_functions: List of source function names to enable (e.g., ['filename', 'fread'])
+        sink_functions: List of sink function names to enable (e.g., ['malloc', 'strcpy'])
 
     Example:
-        apply_source_sink_filter(config_model, ['gets'], ['memcpy'])
+        apply_source_sink_filter(config_model, ['filename'], ['malloc'])
     """
     # Get all functions using the same API that Binary Ninja UI uses
     all_sources = config_model.get_functions(fun_type="Sources")
@@ -167,11 +167,11 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
                 for func in all_sources:
                     if func.name == source_name:
                         func.enabled = True
-                        log.info("JulietBatchRunner", f"Enabled source: {func.name}")
+                        log.info("PrimeVulBatchRunner", f"Enabled source: {func.name}")
                         break
             else:
                 log.warn(
-                    "JulietBatchRunner",
+                    "PrimeVulBatchRunner",
                     f"Source '{source_name}' not found in YAML configs",
                 )
 
@@ -183,52 +183,36 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
                 for func in all_sinks:
                     if func.name == sink_name:
                         func.enabled = True
-                        log.info("JulietBatchRunner", f"Enabled sink: {func.name}")
+                        log.info("PrimeVulBatchRunner", f"Enabled sink: {func.name}")
                         break
             else:
                 log.warn(
-                    "JulietBatchRunner", f"Sink '{sink_name}' not found in YAML configs"
+                    "PrimeVulBatchRunner",
+                    f"Sink '{sink_name}' not found in YAML configs",
                 )
 
 
 def init(path_ctr):
     """
-    Initialize the Juliet batch runner with the shared path_ctr from the plugin.
-    Registers a BN plugin command to run batch analysis on Juliet test suite.
+    Initialize the PrimeVul batch runner with the shared path_ctr from the plugin.
+    Registers a BN plugin command to run batch analysis on PrimeVul dataset.
     """
 
-    class JulietBatchRunnerTask(BackgroundTask):
+    class PrimeVulBatchRunnerTask(BackgroundTask):
         """
-        Background task for running batch analysis on Juliet test suite.
-        Expected structure:
-        extracted_binaries/
-            Top50/
-                CWE121/
-                    good/
-                        binary1
-                        binary2
-                    bad/
-                        binary3
-                        binary4
-                CWE122/
-                    good/
-                    bad/
-            Top100/
-                CWE121/
-                ...
-            Top150/
-                ...
+        Background task for running batch analysis on PrimeVul dataset.
+        Expected structure: BINARIES_DIR/ with binary files
         """
 
-        def __init__(self, path_ctr, target_cwe, source_sink_mapping):
-            super().__init__(f"Running Juliet batch analysis for {target_cwe}...", True)
+        def __init__(self, path_ctr, binaries_dir, output_dir, source_sink_mapping):
+            super().__init__("Running PrimeVul batch analysis...", True)
             self.path_ctr = path_ctr
+            self.binaries_dir = binaries_dir
+            self.output_dir = output_dir
             self.log_capture = LogCapture()
-            self.target_cwe = target_cwe
             self.source_sink_mapping = source_sink_mapping
 
             # Save the ORIGINAL config state once at initialization
-            # This prevents state pollution between binaries
             config_model = self.path_ctr.config_ctr.config_model
             self.original_states = {}
 
@@ -241,43 +225,38 @@ def init(path_ctr):
                 self.original_states[("sink", func.name)] = func.enabled
 
             log.info(
-                "JulietBatchRunner",
+                "PrimeVulBatchRunner",
                 f"Saved original state: {len([k for k in self.original_states.keys() if k[0] == 'source'])} sources, "
                 f"{len([k for k in self.original_states.keys() if k[0] == 'sink'])} sinks",
             )
 
-        def process_binary(self, fpath, fname, output_dir):
+        def process_binary(self, fpath, fname):
             """
             Process a single binary file.
             Returns True if successful, False otherwise.
             """
-            log.info("JulietBatchRunner", f"Processing {fname}")
+            log.info("PrimeVulBatchRunner", f"Processing {fname}")
 
-            # Load binary in BN - auto-detect format (ELF or PE)
+            # Load binary in BN - auto-detect format
             try:
-                # Use load() function which auto-detects the binary format
                 bv = load(fpath)
                 if not bv:
-                    log.warn("JulietBatchRunner", f"Could not open {fname}")
+                    log.warn("PrimeVulBatchRunner", f"Could not open {fname}")
                     return False
                 bv.update_analysis_and_wait()
-                log.info("JulietBatchRunner", f"Loaded {fname} as {bv.view_type}")
+                log.info("PrimeVulBatchRunner", f"Loaded {fname} as {bv.view_type}")
             except Exception as e:
-                log.error("JulietBatchRunner", f"Failed to load {fname}: {e}")
+                log.error("PrimeVulBatchRunner", f"Failed to load {fname}: {e}")
                 return False
 
             try:
                 # Initialize log capture variable
                 captured_logs = []
 
-                # === CUSTOM CONFIG: Enable only specific sources/sinks for this binary ===
-                # Look up source/sink mapping in JSON by filename (keeping extension)
-                # Use fname directly (e.g., "CWE78_...bad.out")
-
                 # Get config model
                 config_model = self.path_ctr.config_ctr.config_model
 
-                # Check if we're using JSON mapping mode (dict with entries) or enable-all mode (empty dict)
+                # Check if we're using JSON mapping mode or enable-all mode
                 if (
                     len(self.source_sink_mapping) > 0
                     and fname in self.source_sink_mapping
@@ -288,46 +267,26 @@ def init(path_ctr):
                     sinks = mapping.get("sinks", [])
 
                     log.info(
-                        "JulietBatchRunner",
+                        "PrimeVulBatchRunner",
                         f"Found mapping for {fname} - Sources: {sources}, Sinks: {sinks}",
                     )
 
                     # Apply the filter (disable all, enable only specified)
                     apply_source_sink_filter(config_model, sources, sinks)
                     log.info(
-                        "JulietBatchRunner", f"Applied source/sink filter for {fname}"
-                    )
-
-                    # DEBUG: Log what's actually enabled after filter
-                    enabled_sources = [
-                        f.name
-                        for f in config_model.get_functions(fun_type="Sources")
-                        if f.enabled
-                    ]
-                    enabled_sinks = [
-                        f.name
-                        for f in config_model.get_functions(fun_type="Sinks")
-                        if f.enabled
-                    ]
-                    log.info(
-                        "JulietBatchRunner",
-                        f"DEBUG - Actually enabled sources: {enabled_sources}",
-                    )
-                    log.info(
-                        "JulietBatchRunner",
-                        f"DEBUG - Actually enabled sinks: {enabled_sinks}",
+                        "PrimeVulBatchRunner", f"Applied source/sink filter for {fname}"
                     )
                 else:
-                    # Enable-all mode OR binary not found in JSON - enable ALL sources and ALL sinks
+                    # Enable-all mode OR binary not found in JSON
                     if len(self.source_sink_mapping) == 0:
                         log.info(
-                            "JulietBatchRunner",
+                            "PrimeVulBatchRunner",
                             f"Enable-all mode: activating ALL sources and sinks for {fname}",
                         )
                     else:
                         log.info(
-                            "JulietBatchRunner",
-                            f"No mapping found for {fname} in JSON - enabling ALL sources and sinks",
+                            "PrimeVulBatchRunner",
+                            f"No mapping found for {fname} - enabling ALL sources and sinks",
                         )
 
                     all_sources = config_model.get_functions(fun_type="Sources")
@@ -342,7 +301,7 @@ def init(path_ctr):
                         func.enabled = True
 
                     log.info(
-                        "JulietBatchRunner",
+                        "PrimeVulBatchRunner",
                         f"Enabled {len(all_sources)} sources and {len(all_sinks)} sinks for {fname}",
                     )
 
@@ -353,20 +312,20 @@ def init(path_ctr):
                 if self.path_ctr.path_tree_view:
                     cleared_count = self.path_ctr.path_tree_view.clear_all_paths()
                     log.info(
-                        "JulietBatchRunner",
+                        "PrimeVulBatchRunner",
                         f"Cleared {cleared_count} existing path(s) before processing {fname}",
                     )
                     time.sleep(0.1)
                 else:
                     log.warn(
-                        "JulietBatchRunner", f"No PathTreeView available for {fname}"
+                        "PrimeVulBatchRunner", f"No PathTreeView available for {fname}"
                     )
                     return False
 
                 # Run Mole path finding with log capture
-                log.info("JulietBatchRunner", f"Starting path finding for {fname}")
+                log.info("PrimeVulBatchRunner", f"Starting path finding for {fname}")
 
-                # Start capturing logs for debugging no-paths cases
+                # Start capturing logs
                 self.log_capture.start_capture()
 
                 self.path_ctr.find_paths()
@@ -375,7 +334,7 @@ def init(path_ctr):
                 while not self.path_ctr.thread_finished:
                     if self.cancelled:
                         log.info(
-                            "JulietBatchRunner",
+                            "PrimeVulBatchRunner",
                             "Batch processing cancelled during path finding",
                         )
                         self.log_capture.stop_capture()
@@ -387,16 +346,16 @@ def init(path_ctr):
                 captured_logs = self.log_capture.get_logs()
 
                 log.info(
-                    "JulietBatchRunner",
+                    "PrimeVulBatchRunner",
                     f"Captured {len(captured_logs)} log entries during path finding",
                 )
 
-                log.info("JulietBatchRunner", f"Path finding completed for {fname}")
+                log.info("PrimeVulBatchRunner", f"Path finding completed for {fname}")
 
                 # Verify path_tree_view is available
                 if not self.path_ctr.path_tree_view:
                     log.warn(
-                        "JulietBatchRunner",
+                        "PrimeVulBatchRunner",
                         f"No PathTreeView available after path finding for {fname}",
                     )
                     return False
@@ -404,7 +363,7 @@ def init(path_ctr):
                 # Get all path IDs from the model
                 path_ids = list(self.path_ctr.path_tree_view.model.path_ids)
                 if not path_ids:
-                    log.info("JulietBatchRunner", f"No paths found in {fname}")
+                    log.info("PrimeVulBatchRunner", f"No paths found in {fname}")
 
                     # Collect information about sources and sinks actually detected
                     detected_sources = []
@@ -435,11 +394,11 @@ def init(path_ctr):
 
                     except Exception as e:
                         log.warn(
-                            "JulietBatchRunner",
+                            "PrimeVulBatchRunner",
                             f"Could not retrieve detected source/sink info: {e}",
                         )
 
-                    # Remove duplicates and sort for consistency
+                    # Remove duplicates and sort
                     detected_sources = sorted(list(set(detected_sources)))
                     detected_sinks = sorted(list(set(detected_sinks)))
 
@@ -453,16 +412,18 @@ def init(path_ctr):
                         "detected_sinks": detected_sinks
                         if detected_sinks
                         else ["none_detected"],
-                        "message": f"No vulnerability paths detected between sources and sinks in {fname}",
+                        "message": f"No vulnerability paths detected in {fname}",
                     }
 
                     # Save the informative result
-                    out_file = os.path.join(output_dir, f"{fname}.json")
+                    out_file = os.path.join(self.output_dir, f"{fname}.json")
                     with open(out_file, "w") as fp:
                         json.dump([no_paths_result], fp, indent=2)
-                    log.info("JulietBatchRunner", f"Saved no-paths info to {out_file}")
+                    log.info(
+                        "PrimeVulBatchRunner", f"Saved no-paths info to {out_file}"
+                    )
 
-                    # Save debug logs for no-paths case
+                    # Save debug logs
                     if captured_logs:
                         debug_log_data = {
                             "binary_file": fname,
@@ -481,39 +442,28 @@ def init(path_ctr):
                                     )
                                     for level in ["DEBUG", "INFO", "WARNING", "ERROR"]
                                 },
-                                "capture_status": "enabled"
-                                if len(captured_logs) > 0
-                                else "no_logs_captured",
                             },
                         }
 
                         debug_log_file = os.path.join(
-                            output_dir, f"{fname}_debug_logs.json"
+                            self.output_dir, f"{fname}_debug_logs.json"
                         )
                         with open(debug_log_file, "w") as fp:
                             json.dump(debug_log_data, fp, indent=2)
                         log.info(
-                            "JulietBatchRunner",
+                            "PrimeVulBatchRunner",
                             f"Saved debug logs to {debug_log_file}",
                         )
 
-                    # Clear any potential leftover paths
-                    if self.path_ctr.path_tree_view:
-                        cleared_count = self.path_ctr.path_tree_view.clear_all_paths()
-                        if cleared_count > 0:
-                            log.info(
-                                "JulietBatchRunner",
-                                f"No-paths cleanup: cleared {cleared_count} unexpected path(s) for {fname}",
-                            )
                     return True
 
                 log.info(
-                    "JulietBatchRunner", f"Found {len(path_ids)} path(s) in {fname}"
+                    "PrimeVulBatchRunner", f"Found {len(path_ids)} path(s) in {fname}"
                 )
 
                 # Run AI analysis on all paths
                 log.info(
-                    "JulietBatchRunner",
+                    "PrimeVulBatchRunner",
                     f"Starting AI analysis for {len(path_ids)} path(s)",
                 )
                 self.path_ctr.analyze_paths(path_ids)
@@ -522,53 +472,26 @@ def init(path_ctr):
                 while not self.path_ctr.thread_finished:
                     if self.cancelled:
                         log.info(
-                            "JulietBatchRunner",
+                            "PrimeVulBatchRunner",
                             "Batch processing cancelled during AI analysis",
                         )
                         return False
                     time.sleep(0.5)
 
-                log.info("JulietBatchRunner", f"AI analysis completed for {fname}")
+                log.info("PrimeVulBatchRunner", f"AI analysis completed for {fname}")
 
-                # Check captured logs for AI analysis errors
-                ai_errors = {}
-                for log_entry in captured_logs:
-                    msg = log_entry.get("message", "")
-                    module = log_entry.get("module", "")
-
-                    # Check for AI analysis failures
-                    if module == "Mole.AI" and (
-                        "Failed to send messages" in msg
-                        or "No response received" in msg
-                    ):
-                        # Extract path ID from message like "[Path:1]"
-                        import re
-
-                        path_match = re.search(r"\[Path:(\d+)\]", msg)
-                        if path_match:
-                            path_id = int(path_match.group(1))
-                            if path_id not in ai_errors:
-                                ai_errors[path_id] = []
-                            ai_errors[path_id].append(
-                                {
-                                    "level": log_entry.get("level"),
-                                    "message": msg,
-                                    "timestamp": log_entry.get("timestamp"),
-                                }
-                            )
-
-                # Collect results with simplified output
+                # Collect results
                 results = []
                 for pid in path_ids:
                     try:
                         path = self.path_ctr.path_tree_view.get_path(pid)
                         if not path:
                             log.warn(
-                                "JulietBatchRunner", f"Could not retrieve path {pid}"
+                                "PrimeVulBatchRunner", f"Could not retrieve path {pid}"
                             )
                             continue
 
-                        # Create simplified path data with AI report
+                        # Create simplified path data
                         simplified_data = {
                             "binary_file": fname,
                             "path_id": pid,
@@ -585,7 +508,7 @@ def init(path_ctr):
                             "comment": path.comment if path.comment else None,
                         }
 
-                        # Calculate path structural complexity metrics
+                        # Calculate path complexity metrics
                         import math
 
                         num_instructions = (
@@ -594,8 +517,6 @@ def init(path_ctr):
                         num_phi_calls = len(path.phiis) if hasattr(path, "phiis") else 0
                         num_branches = len(path.bdeps) if hasattr(path, "bdeps") else 0
 
-                        # Composite metric: D = 0.6*log(1+B) + 0.3*log(1+Φ) + 0.1*log(1+I)
-                        # B = branches, Φ = phi calls, I = instructions
                         complexity_score = (
                             0.5 * math.log(1 + num_branches)
                             + 0.3 * math.log(1 + num_phi_calls)
@@ -642,42 +563,35 @@ def init(path_ctr):
                         else:
                             simplified_data["ai_report"] = None
 
-                        # Include AI analysis errors if any occurred for this path
-                        if pid in ai_errors:
-                            simplified_data["ai_analysis_errors"] = ai_errors[pid]
-                        else:
-                            simplified_data["ai_analysis_errors"] = None
-
                         results.append(simplified_data)
                     except Exception as e:
                         log.error(
-                            "JulietBatchRunner", f"Failed to export path {pid}: {e}"
+                            "PrimeVulBatchRunner", f"Failed to export path {pid}: {e}"
                         )
                         continue
 
                 # Save JSON report
-                out_file = os.path.join(output_dir, f"{fname}.json")
+                out_file = os.path.join(self.output_dir, f"{fname}.json")
                 with open(out_file, "w") as fp:
                     json.dump(results, fp, indent=2)
 
                 log.info(
-                    "JulietBatchRunner", f"Saved {len(results)} path(s) to {out_file}"
+                    "PrimeVulBatchRunner", f"Saved {len(results)} path(s) to {out_file}"
                 )
 
-                # Clear paths after saving to prevent merging with next binary
+                # Clear paths after saving
                 if self.path_ctr.path_tree_view:
                     cleared_count = self.path_ctr.path_tree_view.clear_all_paths()
                     log.info(
-                        "JulietBatchRunner",
-                        f"Post-processing cleanup: cleared {cleared_count} path(s) for {fname}",
+                        "PrimeVulBatchRunner",
+                        f"Cleared {cleared_count} path(s) after processing {fname}",
                     )
 
                 return True
 
             except Exception as e:
-                log.error("JulietBatchRunner", f"Error processing {fname}: {e}")
+                log.error("PrimeVulBatchRunner", f"Error processing {fname}: {e}")
 
-                # Ensure log capture is stopped even on error
                 try:
                     self.log_capture.stop_capture()
                 except Exception:
@@ -686,247 +600,108 @@ def init(path_ctr):
                 return False
 
             finally:
-                # Restore ORIGINAL enabled/disabled states (always restore to original)
+                # Restore ORIGINAL enabled/disabled states
                 try:
                     if hasattr(self, "original_states") and self.original_states:
                         config_model = self.path_ctr.config_ctr.config_model
 
-                        # Restore sources to original state
+                        # Restore sources
                         for func in config_model.get_functions(fun_type="Sources"):
                             key = ("source", func.name)
                             if key in self.original_states:
                                 func.enabled = self.original_states[key]
 
-                        # Restore sinks to original state
+                        # Restore sinks
                         for func in config_model.get_functions(fun_type="Sinks"):
                             key = ("sink", func.name)
                             if key in self.original_states:
                                 func.enabled = self.original_states[key]
 
                         log.info(
-                            "JulietBatchRunner",
-                            "Restored to original source/sink states for next binary",
+                            "PrimeVulBatchRunner",
+                            "Restored original source/sink states",
                         )
                 except Exception as e:
                     log.warn(
-                        "JulietBatchRunner", f"Could not restore original states: {e}"
+                        "PrimeVulBatchRunner", f"Could not restore original states: {e}"
                     )
 
-                # Explicit cleanup
+                # Cleanup
                 try:
                     if bv:
                         bv.file.close()
                         del bv
                 except Exception as e:
-                    log.error("JulietBatchRunner", f"Error closing {fname}: {e}")
+                    log.error("PrimeVulBatchRunner", f"Error closing {fname}: {e}")
 
         def run(self):
             """
-            Run the Juliet batch processing in the background.
-            Supports two directory structures:
-            1. With Top folders: BASE_DIR/Top50/CWE121/good_versions/*.bin
-            2. Direct CWE folders: BASE_DIR/CWE121/good_versions/*.bin
-
-            Only processes the CWE specified in self.target_cwe
+            Run the PrimeVul batch processing in the background.
             """
-            # FLAVIO: Track execution time and statistics for performance analysis
+            # FLAVIO: Track execution time and statistics
             batch_start_time = time.time()
-            binary_timings = []  # Store (binary_name, elapsed_seconds, num_paths) for each binary
+            binary_timings = []
             total_paths_found = 0
 
-            # Hardcoded paths - adjust as needed
-            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels/compiled_Juliet_O3-s"
-            OUTPUT_BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_compiled_Juliet_O3-s"
+            os.makedirs(self.output_dir, exist_ok=True)
 
-            TARGET_CWE = self.target_cwe
-
-            if not os.path.exists(BASE_DIR):
-                log.error("JulietBatchRunner", f"Base directory not found: {BASE_DIR}")
-                return
-
-            # Create output base directory
-            os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
-
-            log.info("JulietBatchRunner", f"*** Processing only {TARGET_CWE} ***")
-
-            # Detect directory structure
-            # Check if we have Top50/Top100/Top150 folders or direct CWE folders
-            has_top_folders = False
-            top_folders = ["Top50", "Top100", "Top150"]
-
-            for top_folder in top_folders:
-                if os.path.exists(os.path.join(BASE_DIR, top_folder)):
-                    has_top_folders = True
-                    break
-
-            # Check if target CWE exists directly in BASE_DIR
-            direct_cwe_path = os.path.join(BASE_DIR, TARGET_CWE)
-            has_direct_cwe = os.path.exists(direct_cwe_path)
-
-            if has_top_folders:
-                log.info(
-                    "JulietBatchRunner", "Detected Top50/Top100/Top150 folder structure"
-                )
-            elif has_direct_cwe:
-                log.info("JulietBatchRunner", "Detected direct CWE folder structure")
-            else:
-                log.error(
-                    "JulietBatchRunner",
-                    f"Could not find {TARGET_CWE} in either folder structure",
-                )
-                return
-
-            total_binaries = 0
+            binary_files = [
+                f
+                for f in os.listdir(self.binaries_dir)
+                if os.path.isfile(os.path.join(self.binaries_dir, f))
+            ]
+            total_files = len(binary_files)
             processed_binaries = 0
 
-            # Build list of paths to process: [(top_folder_name, cwe_path)]
-            # top_folder_name can be None for direct structure
-            paths_to_process = []
-
-            if has_top_folders:
-                # Structure: Top50/CWE121/good_versions
-                for top_folder in top_folders:
-                    top_path = os.path.join(BASE_DIR, top_folder)
-                    if not os.path.exists(top_path):
-                        continue
-
-                    target_cwe_path = os.path.join(top_path, TARGET_CWE)
-                    if os.path.exists(target_cwe_path):
-                        paths_to_process.append((top_folder, target_cwe_path))
-                        log.info(
-                            "JulietBatchRunner", f"Found CWE path: {target_cwe_path}"
-                        )
-
-            if has_direct_cwe:
-                # Structure: CWE121/good_versions (no Top folder)
-                paths_to_process.append((None, direct_cwe_path))
-                log.info(
-                    "JulietBatchRunner", f"Found direct CWE path: {direct_cwe_path}"
-                )
-
-            # First pass: count total binaries for progress tracking
-            for top_folder, cwe_path in paths_to_process:
-                # Check for good_versions and bad_versions subfolders
-                for category in ["good_versions", "bad_versions"]:
-                    category_path = os.path.join(cwe_path, category)
-                    if os.path.exists(category_path):
-                        binaries = [
-                            f
-                            for f in os.listdir(category_path)
-                            if os.path.isfile(os.path.join(category_path, f))
-                        ]
-                        total_binaries += len(binaries)
-
             log.info(
-                "JulietBatchRunner",
-                f"Found {total_binaries} binaries to process in {TARGET_CWE}",
+                "PrimeVulBatchRunner",
+                f"Found {total_files} binaries to process in {self.binaries_dir}",
             )
 
-            # Second pass: process all binaries
-            for top_folder, cwe_path in paths_to_process:
+            for i, fname in enumerate(binary_files):
                 if self.cancelled:
-                    log.info("JulietBatchRunner", "Batch processing cancelled by user")
+                    log.info(
+                        "PrimeVulBatchRunner", "Batch processing cancelled by user"
+                    )
                     break
 
-                # Create corresponding output folder structure
-                if top_folder:
-                    # With Top folder: OUTPUT_BASE_DIR/Top50/CWE121/
-                    output_cwe_dir = os.path.join(
-                        OUTPUT_BASE_DIR, top_folder, TARGET_CWE
-                    )
+                self.progress = f"Processing {fname} ({i + 1}/{total_files})"
+                fpath = os.path.join(self.binaries_dir, fname)
+
+                # FLAVIO: Track per-binary timing
+                binary_start_time = time.time()
+
+                success = self.process_binary(fpath, fname)
+
+                # FLAVIO: Record timing and path count
+                binary_elapsed = time.time() - binary_start_time
+
+                num_paths = 0
+                try:
+                    json_file = os.path.join(self.output_dir, f"{fname}.json")
+                    if os.path.exists(json_file):
+                        with open(json_file, "r") as f:
+                            paths_data = json.load(f)
+                            num_paths = (
+                                len(paths_data) if isinstance(paths_data, list) else 0
+                            )
+                            total_paths_found += num_paths
+                except Exception:
+                    pass
+
+                binary_timings.append((fname, binary_elapsed, num_paths))
+
+                if success:
+                    processed_binaries += 1
                     log.info(
-                        "JulietBatchRunner", f"Processing {top_folder}/{TARGET_CWE}"
+                        "PrimeVulBatchRunner",
+                        f"Successfully processed {fname} ({i + 1}/{total_files})",
                     )
                 else:
-                    # Direct: OUTPUT_BASE_DIR/CWE121/
-                    output_cwe_dir = os.path.join(OUTPUT_BASE_DIR, TARGET_CWE)
-                    log.info("JulietBatchRunner", f"Processing {TARGET_CWE}")
-
-                os.makedirs(output_cwe_dir, exist_ok=True)
-
-                # Process both good_versions and bad_versions binaries
-                for category in ["good_versions", "bad_versions"]:
-                    if self.cancelled:
-                        break
-
-                    category_path = os.path.join(cwe_path, category)
-                    if not os.path.exists(category_path):
-                        log.warn(
-                            "JulietBatchRunner",
-                            f"Skipping missing {category} folder in {TARGET_CWE}",
-                        )
-                        continue
-
-                    # Create corresponding output folder
-                    output_category_dir = os.path.join(output_cwe_dir, category)
-                    os.makedirs(output_category_dir, exist_ok=True)
-
-                    # Get all binary files directly from category folder
-                    binaries = sorted(
-                        [
-                            f
-                            for f in os.listdir(category_path)
-                            if os.path.isfile(os.path.join(category_path, f))
-                        ]
+                    log.warn(
+                        "PrimeVulBatchRunner",
+                        f"Failed to process {fname} ({i + 1}/{total_files})",
                     )
-
-                    log.info(
-                        "JulietBatchRunner",
-                        f"Found {len(binaries)} {category} binaries in {TARGET_CWE}",
-                    )
-
-                    for fname in binaries:
-                        if self.cancelled:
-                            break
-
-                        processed_binaries += 1
-
-                        if top_folder:
-                            self.progress = f"Processing {fname} ({processed_binaries}/{total_binaries}) - {top_folder}/{TARGET_CWE}/{category}"
-                        else:
-                            self.progress = f"Processing {fname} ({processed_binaries}/{total_binaries}) - {TARGET_CWE}/{category}"
-
-                        fpath = os.path.join(category_path, fname)
-
-                        # FLAVIO: Track per-binary timing
-                        binary_start_time = time.time()
-
-                        # Process the binary
-                        success = self.process_binary(fpath, fname, output_category_dir)
-
-                        # FLAVIO: Record timing and path count for this binary
-                        binary_elapsed = time.time() - binary_start_time
-
-                        # Count paths by reading the JSON output file
-                        num_paths = 0
-                        try:
-                            json_file = os.path.join(
-                                output_category_dir, f"{fname}.json"
-                            )
-                            if os.path.exists(json_file):
-                                with open(json_file, "r") as f:
-                                    paths_data = json.load(f)
-                                    num_paths = (
-                                        len(paths_data)
-                                        if isinstance(paths_data, list)
-                                        else 0
-                                    )
-                                    total_paths_found += num_paths
-                        except Exception:
-                            pass
-
-                        binary_timings.append((fname, binary_elapsed, num_paths))
-
-                        if success:
-                            log.info(
-                                "JulietBatchRunner",
-                                f"Successfully processed {fname} ({processed_binaries}/{total_binaries})",
-                            )
-                        else:
-                            log.warn(
-                                "JulietBatchRunner",
-                                f"Failed to process {fname} ({processed_binaries}/{total_binaries})",
-                            )
 
             # FLAVIO: Calculate and save execution statistics
             batch_end_time = time.time()
@@ -934,7 +709,6 @@ def init(path_ctr):
             elapsed_minutes = elapsed_seconds / 60
             elapsed_hours = elapsed_minutes / 60
 
-            # Calculate statistics
             avg_time_per_binary = (
                 elapsed_seconds / processed_binaries if processed_binaries > 0 else 0
             )
@@ -955,9 +729,9 @@ def init(path_ctr):
 
             # FLAVIO: Create summary statistics JSON
             summary = {
-                "cwe": TARGET_CWE,
+                "dataset": "PrimeVul",
                 "total_binaries_processed": processed_binaries,
-                "total_binaries_found": total_binaries,
+                "total_binaries_found": total_files,
                 "total_paths_found": total_paths_found,
                 "total_execution_time_seconds": round(elapsed_seconds, 2),
                 "total_execution_time_formatted": time_str,
@@ -974,35 +748,35 @@ def init(path_ctr):
                 "timestamp": datetime.now().isoformat(),
             }
 
-            # Save summary to output directory
-            summary_file = os.path.join(
-                OUTPUT_BASE_DIR, f"{TARGET_CWE}_batch_summary.json"
-            )
+            # Save summary
+            summary_file = os.path.join(self.output_dir, "primevul_batch_summary.json")
             try:
                 with open(summary_file, "w") as f:
                     json.dump(summary, f, indent=2)
-                log.info("JulietBatchRunner", f"Saved batch summary to {summary_file}")
+                log.info(
+                    "PrimeVulBatchRunner", f"Saved batch summary to {summary_file}"
+                )
             except Exception as e:
-                log.error("JulietBatchRunner", f"Failed to save summary: {e}")
+                log.error("PrimeVulBatchRunner", f"Failed to save summary: {e}")
 
             if not self.cancelled:
                 log.info(
-                    "JulietBatchRunner",
-                    f"{TARGET_CWE} batch processing completed! Processed {processed_binaries}/{total_binaries} binaries, found {total_paths_found} paths in {time_str}",
+                    "PrimeVulBatchRunner",
+                    f"PrimeVul batch processing completed! Processed {processed_binaries}/{total_files} binaries, found {total_paths_found} paths in {time_str}",
                 )
             else:
                 log.info(
-                    "JulietBatchRunner",
-                    f"{TARGET_CWE} batch processing cancelled. Processed {processed_binaries}/{total_binaries} binaries, found {total_paths_found} paths in {time_str}",
+                    "PrimeVulBatchRunner",
+                    f"PrimeVul batch processing cancelled. Processed {processed_binaries}/{total_files} binaries in {time_str}",
                 )
 
-    def run_juliet_batch(bv=None):
+    def run_primevul_batch(bv=None):
         """
-        Start the Juliet batch runner as a background task.
-        Shows a UI dialog to select which CWE to process.
+        Start the PrimeVul batch runner as a background task.
         """
         # Hardcoded paths - adjust as needed
-        BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED"
+        BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_PrimeVul/compiled_objects"
+        OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_PrimeVul/test1"
 
         # Ask user to choose mode: JSON mapping or enable all
         mode_choice = interaction.get_choice_input(
@@ -1015,80 +789,21 @@ def init(path_ctr):
         )
 
         if mode_choice is None:
-            log.info("JulietBatchRunner", "User cancelled mode selection")
+            log.info("PrimeVulBatchRunner", "User cancelled mode selection")
             return
 
         use_json_mapping = mode_choice == 0
 
-        # Scan for available CWEs in both directory structures:
-        # 1. Top50/Top100/Top150 folders containing CWEs
-        # 2. Direct CWE folders in BASE_DIR
-        available_cwes = set()
-        top_folders = ["Top50", "Top100", "Top150"]
-
-        # Check for Top folder structure
-        for top_folder in top_folders:
-            top_path = os.path.join(BASE_DIR, top_folder)
-            if os.path.exists(top_path):
-                cwe_folders = [
-                    d
-                    for d in os.listdir(top_path)
-                    if os.path.isdir(os.path.join(top_path, d)) and d.startswith("CWE")
-                ]
-                if cwe_folders:
-                    log.info(
-                        "JulietBatchRunner",
-                        f"Found CWEs in {top_folder}: {cwe_folders}",
-                    )
-                    available_cwes.update(cwe_folders)
-
-        # Check for direct CWE folders in BASE_DIR
-        direct_cwe_folders = [
-            d
-            for d in os.listdir(BASE_DIR)
-            if os.path.isdir(os.path.join(BASE_DIR, d)) and d.startswith("CWE")
-        ]
-        if direct_cwe_folders:
-            log.info(
-                "JulietBatchRunner", f"Found direct CWE folders: {direct_cwe_folders}"
-            )
-            available_cwes.update(direct_cwe_folders)
-
-        if not available_cwes:
-            log.error("JulietBatchRunner", f"No CWE folders found in {BASE_DIR}")
-            interaction.show_message_box(
-                "No CWE Folders Found",
-                f"Could not find any CWE folders in:\n{BASE_DIR}",
-                buttons=interaction.MessageBoxButtonSet.OKButtonSet,
-            )
-            return
-
-        # Sort CWEs for nice display
-        cwe_list = sorted(list(available_cwes))
-
-        # Show choice dialog
-        cwe_choice = interaction.get_choice_input(
-            "Select CWE to Process", "choices", cwe_list
-        )
-
-        if cwe_choice is None:
-            log.info("JulietBatchRunner", "User cancelled CWE selection")
-            return
-
-        selected_cwe = cwe_list[cwe_choice]
-
-        # Load JSON mapping only if user chose that mode
+        # Load JSON mapping if user chose that mode
         source_sink_mapping = None
         if use_json_mapping:
-            # Build JSON mapping path based on selected CWE
-            # Example: CWE121 -> juliet_source_sink_mapping_CWE121.json
-            JSON_MAPPING_PATH = f"/Users/flaviogottschalk/dev/BachelorArbeit/Source_Sink_mappings/Source_Sink_Mappings_CUT/Juliet{selected_cwe}_source_sink_mapping_CURATED.json"
+            JSON_MAPPING_PATH = "/path/to/primevul_source_sink_mapping.json"
 
-            # Load the source/sink mapping from JSON
             source_sink_mapping = load_source_sink_mapping(JSON_MAPPING_PATH)
             if not source_sink_mapping:
                 log.error(
-                    "JulietBatchRunner", "Could not load source/sink mapping - aborting"
+                    "PrimeVulBatchRunner",
+                    "Could not load source/sink mapping - aborting",
                 )
                 interaction.show_message_box(
                     "Mapping File Error",
@@ -1097,23 +812,25 @@ def init(path_ctr):
                 )
                 return
             log.info(
-                "JulietBatchRunner",
-                f"Starting Juliet batch processing for {selected_cwe} with JSON mapping...",
+                "PrimeVulBatchRunner",
+                "Starting PrimeVul batch processing with JSON mapping...",
             )
         else:
             # Use empty dict to signal "enable all" mode
             source_sink_mapping = {}
             log.info(
-                "JulietBatchRunner",
-                f"Starting Juliet batch processing for {selected_cwe} with ALL sources/sinks enabled...",
+                "PrimeVulBatchRunner",
+                "Starting PrimeVul batch processing with ALL sources/sinks enabled...",
             )
 
-        task = JulietBatchRunnerTask(path_ctr, selected_cwe, source_sink_mapping)
+        task = PrimeVulBatchRunnerTask(
+            path_ctr, BINARIES_DIR, OUTPUT_DIR, source_sink_mapping
+        )
         task.start()
 
     # Register command in BN
     PluginCommand.register(
-        "Mole\\Batch Run Juliet",
-        "Run Find Paths + AI Analysis on Juliet Test Suite (Background)",
-        run_juliet_batch,
+        "Mole\\Batch Run PrimeVul",
+        "Run Find Paths + AI Analysis on PrimeVul Dataset (Background)",
+        run_primevul_batch,
     )

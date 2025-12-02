@@ -202,8 +202,8 @@ def init(path_ctr):
             processed_binaries = 0
 
             # Hardcoded paths for now
-            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/CASTLE_repo/CASTLE-Benchmark/datasets/CASTLE-C250_binariesV2"
-            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_CASTLE/results_CASTLE_model_claude-sonnet-4.5_run3"
+            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_CASTLE/Compiled_CASTLE_O0-s"
+            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Results_Diff_Opt_CASTLE/Results_CASTLE_O0-s"
 
             os.makedirs(OUTPUT_DIR, exist_ok=True)
 
