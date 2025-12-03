@@ -151,6 +151,12 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
     all_sources = config_model.get_functions(fun_type="Sources")
     all_sinks = config_model.get_functions(fun_type="Sinks")
 
+    # FLAVIO: Debug - show all available functions before filtering
+    all_source_names = [func.name for func in all_sources]
+    all_sink_names = [func.name for func in all_sinks]
+    log.info("PrimeVulBatchRunner", f"Available sources: {all_source_names}")
+    log.info("PrimeVulBatchRunner", f"Available sinks: {all_sink_names}")
+
     # Disable ALL sources
     for func in all_sources:
         func.enabled = False
@@ -158,6 +164,11 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
     # Disable ALL sinks
     for func in all_sinks:
         func.enabled = False
+
+    log.info(
+        "PrimeVulBatchRunner",
+        f"Disabled all {len(all_sources)} sources and {len(all_sinks)} sinks",
+    )
 
     # Enable only the specified sources
     if source_functions:
@@ -172,7 +183,7 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
             else:
                 log.warn(
                     "PrimeVulBatchRunner",
-                    f"Source '{source_name}' not found in YAML configs",
+                    f"Source '{source_name}' not found in YAML configs. Available: {all_source_names}",
                 )
 
     # Enable only the specified sinks
@@ -188,7 +199,7 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
             else:
                 log.warn(
                     "PrimeVulBatchRunner",
-                    f"Sink '{sink_name}' not found in YAML configs",
+                    f"Sink '{sink_name}' not found in YAML configs. Available: {all_sink_names}",
                 )
 
 
@@ -256,19 +267,24 @@ def init(path_ctr):
                 # Get config model
                 config_model = self.path_ctr.config_ctr.config_model
 
+                # FLAVIO: Strip .o extension for JSON mapping lookup
+                fname_without_ext = (
+                    fname.rstrip(".o") if fname.endswith(".o") else fname
+                )
+
                 # Check if we're using JSON mapping mode or enable-all mode
                 if (
                     len(self.source_sink_mapping) > 0
-                    and fname in self.source_sink_mapping
+                    and fname_without_ext in self.source_sink_mapping
                 ):
                     # JSON mapping mode: Found specific mapping for this binary
-                    mapping = self.source_sink_mapping[fname]
+                    mapping = self.source_sink_mapping[fname_without_ext]
                     sources = mapping.get("sources", [])
                     sinks = mapping.get("sinks", [])
 
                     log.info(
                         "PrimeVulBatchRunner",
-                        f"Found mapping for {fname} - Sources: {sources}, Sinks: {sinks}",
+                        f"Found mapping for {fname} (matched as {fname_without_ext}) - Sources: {sources}, Sinks: {sinks}",
                     )
 
                     # Apply the filter (disable all, enable only specified)
@@ -775,8 +791,8 @@ def init(path_ctr):
         Start the PrimeVul batch runner as a background task.
         """
         # Hardcoded paths - adjust as needed
-        BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_PrimeVul/compiled_objects"
-        OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_PrimeVul/test1"
+        BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_PrimeVul/compiled_objects_clean_only"
+        OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_PrimeVul/test2"
 
         # Ask user to choose mode: JSON mapping or enable all
         mode_choice = interaction.get_choice_input(
@@ -797,7 +813,7 @@ def init(path_ctr):
         # Load JSON mapping if user chose that mode
         source_sink_mapping = None
         if use_json_mapping:
-            JSON_MAPPING_PATH = "/path/to/primevul_source_sink_mapping.json"
+            JSON_MAPPING_PATH = "/Users/flaviogottschalk/dev/BachelorArbeit/Source_Sink_mappings/source_sink_mapping_clean_PrimeVul.json"
 
             source_sink_mapping = load_source_sink_mapping(JSON_MAPPING_PATH)
             if not source_sink_mapping:

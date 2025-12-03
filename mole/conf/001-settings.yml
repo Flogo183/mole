@@ -44,13 +44,13 @@ settings:
   path_grouping:
     help: strategy used to group paths
     value: Call Graph
-  openrouter_base_url:
+  openai_base_url:
     help: OpenAI API base URL
     value: "https://openrouter.ai/api/v1"
-  openrouter_key:
+  openai_api_key:
     help: OpenAI API key
     value: ""
-  openrouter_model:
+  openai_model:
     help: OpenAI model
     value: "o4-mini"
   max_turns:
