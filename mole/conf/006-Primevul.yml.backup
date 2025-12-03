@@ -1,0 +1,537 @@
+sources:
+  primevul:
+    categories:
+      command_line_arguments:
+        functions:
+          parse_user_name:
+            symbols:
+              - parse_user_name
+              - _parse_user_name
+              - parse_user_name@plt
+              - __builtin_parse_user_name
+            synopsis: int64_t parse_user_name(char* arg1, int64_t* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          src_parser_trans_stage_1_2_3:
+            symbols:
+              - src_parser_trans_stage_1_2_3
+            synopsis: int src_parser_trans_stage_1_2_3(int tmp_fd, const char* src, const struct trans_config cfg)
+            enabled: true
+            par_cnt: i >= 1
+            par_slice: i == 2
+
+          GmfOpenMesh:
+            symbols:
+              - GmfOpenMesh
+              - _GmfOpenMesh
+              - GmfOpenMesh@plt
+              - __builtin_GmfOpenMesh
+            synopsis: int64_t* GmfOpenMesh(int64_t arg1, int32_t arg2, int64_t arg3, int128_t arg4 @ v0, int128_t arg5 @ v1, int128_t arg6 @ v2, int128_t arg7 @ v3, int128_t arg8 @ v4, int128_t arg9 @ v5, int128_t arg10 @ v6, int128_t arg11 @ v7)
+            enabled: true
+            par_cnt: i == 11
+            par_slice: i == 1
+
+          tcp_emu:
+            symbols:
+              - tcp_emu
+            synopsis: int tcp_emu(struct socket* so, struct mbuf* m)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 2 # m is tainted because m->m_data is attacker-controlled
+
+          add_slot_store:
+            symbols:
+              - add_slot_store
+            synopsis: int64_t add_slot_store(int64_t arg1, int64_t arg2, int64_t arg3, int64_t arg4)
+            enabled: true
+            par_cnt: i == 4
+            par_slice: i == 2 # buf is attacker-controlled
+
+          read_central_directory:
+            symbols:
+              - read_central_directory
+            synopsis: int64_t read_central_directory(void* arg1, int64_t arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1 # index of first attacker-controlled piece (buffer)
+
+          read_local_file_header:
+            symbols: [read_local_file_header]
+            synopsis: int64_t read_local_file_header(void* arg1, int64_t arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          read_end_of_central_directory:
+            symbols: [read_end_of_central_directory]
+            synopsis: int64_t read_end_of_central_directory(void* arg1, int64_t arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          read_local_file_header_patched:
+            symbols: [read_local_file_header_patched]
+            synopsis: int64_t read_local_file_header_patched(void* arg1, int64_t arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          read_central_directory_patched:
+            symbols: [read_central_directory_patched]
+            synopsis: int64_t read_central_directory_patched(void* arg1, int64_t arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          json_internal_read_object:
+            symbols: [json_internal_read_object]
+            synopsis: int json_internal_read_object(const char* cp, const struct json_attr_t* attrs, const struct json_array_t* parent, int offset, const char** end)
+            enabled: true
+            par_cnt: i == 5
+            par_slice: i == 0 # cp is attacker-controlled JSON input
+
+          parse:
+            symbols: [parse]
+            synopsis: int64_t parse(char* arg1)
+            enabled: true
+            par_cnt: i == 1
+            par_slice: i == 0 # elf_map (mmap result) derives from attacker-controlled file
+            # stub is sufficient and will NOT be optimized away (optnone + noinline used)
+
+          gst_asf_demux_process_ext_content_desc:
+            symbols: [gst_asf_demux_process_ext_content_desc]
+            synopsis: int64_t gst_asf_demux_process_ext_content_desc(int64_t* arg1, int64_t arg2, int64_t arg3)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 1 # 'data' pointer contains attacker-controlled ASF metadata
+            # sink: memcpy inside gst_asf_demux_get_string() is the first harmful dereference
+            # stub is sufficient and will NOT be optimized away (optnone + noinline used)
+
+          __fdnlist:
+            symbols: [__fdnlist]
+            synopsis: uint64_t __fdnlist(int32_t arg1, int64_t* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 0
+
+          dynamicGetbuf:
+            symbols: [dynamicGetbuf]
+            synopsis: uint64_t dynamicGetbuf(int64_t* arg1, int64_t arg2, int32_t arg3)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 0
+
+          ng_pkt:
+            symbols: [ng_pkt]
+            synopsis: int64_t ng_pkt(int32_t** arg1, int64_t arg2)
+            enabled: true
+            par_cnt: i >= 2
+            par_slice: i == 0 # attacker-controlled 'line' originates from git_smart__recv
+            # sink: strchr(line, ' ') and strchr(line, '\n') scan attacker-controlled memory
+            # stub is sufficient and will NOT be optimized away
+
+          idn_main_vulnerable:
+            symbols: [idn_main_vulnerable]
+            synopsis: int64_t idn_main_vulnerable(int32_t arg1, int64_t* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1 # argv is attacker-controlled
+            # stub: not needed; this function receives argv directly
+
+          parseOperand:
+            symbols:
+              - parseOperand
+            synopsis: size_t parseOperand(void* arg1, char* arg2, int32_t* arg3, char arg4)
+            enabled: true
+            par_cnt: i == 4
+            par_slice: i == 2 # str is the taint source
+
+          string_scan_range:
+            symbols: [string_scan_range]
+            synopsis: uint64_t string_scan_range(int64_t arg1, int64_t* arg2, int32_t arg3, int64_t arg4, int64_t arg5, int32_t arg6, int32_t arg7, int64_t* arg8, int128_t arg9 @ v0, int128_t arg10 @ v1, int128_t arg11 @ v2, int128_t arg12 @ v3, int128_t arg13 @ v4, int128_t arg14 @ v5, int128_t arg15 @ v6, int128_t arg16 @ v7)
+            enabled: true
+            par_cnt: i >=14
+            par_slice: i == 2 # bf parameter
+
+          fs_printfh:
+            symbols: [nfs_printfh]
+            synopsis: int64_t nfs_printfh(int32_t* arg1, int64_t arg2, int32_t arg3)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 2 # dp = raw network packet bytes
+
+          Parse_fh:
+            symbols: [Parse_fh]
+            synopsis: int64_t* Parse_fh(int64_t arg1, int32_t arg2, int32_t* arg3, int32_t* arg4, int64_t arg5, int64_t* arg6)
+            enabled: true
+            par_cnt: i == 6
+            par_slice: i == 6 # fsname (arg6) becomes tainted
+
+          file_add_mapi_attrs:
+            symbols:
+              - file_add_mapi_attrs
+            synopsis: int64_t file_add_mapi_attrs(int64_t* arg1, void* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 2
+
+          ReadBlobString:
+            symbols: [ReadBlobString]
+            synopsis: int64_t ReadBlobString(int64_t arg1, int64_t arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 2 # buffer receives tainted bytes
+
+          sc_read_record:
+            symbols: [sc_read_record]
+            synopsis: size_t sc_read_record(int64_t arg1, int32_t arg2, void* arg3, size_t arg4)
+            enabled: true
+            par_cnt: i == 4
+            par_slice: "true "
+
+          read:
+            symbols: [read, __read, read@plt]
+            synopsis: ssize_t read(int fd, void* buf, size_t count)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 1
+
+          fread:
+            symbols: [fread, _fread, __fread_chk]
+            synopsis: size_t fread(void* buf, size_t size, size_t count, FILE* fp)
+            enabled: true
+            par_cnt: i == 4
+            par_slice: i == 1 # data copied here (buffer argument)
+
+          extract_sockaddr:
+            symbols: [extract_sockaddr]
+            synopsis: int64_t extract_sockaddr(int64_t* arg1, char* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 2 # url is attacker-controlled
+
+          bns_restore_prefix:
+            symbols: [bns_restore]
+            synopsis: int32_t* bns_restore(int64_t arg1)
+            enabled: true
+            par_cnt: i == 1
+            par_slice: i == 1
+
+          Mangle_input:
+            symbols: [Mangle]
+            synopsis: char* Mangle(int64_t arg1, char* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: [1] # only 'input' is tainted
+
+          string_vformat_ap:
+            symbols: [string_vformat]
+            synopsis: int64_t* string_vformat(int64_t* arg1, int32_t arg2, char* arg3, int64_t* arg4)
+            enabled: true
+            par_cnt: i == 4
+            par_slice: i == 4 # only the va_list is tainted
+
+          is_git_directory_suspect:
+            symbols: [is_git_directory]
+            synopsis: int64_t is_git_directory(char* arg1)
+            enabled: true
+            par_cnt: i == 1
+            par_slice: i == 1 # only the suspect path is tainted
+
+          enhanced_recursion_p:
+            symbols: [enhanced_recursion]
+            synopsis:
+              const char* enhanced_recursion(const char* p, TBOOLEAN brace, char* fontname,
+              double fontsize, double base,
+              TBOOLEAN widthflag, TBOOLEAN showflag,
+              int overprint)
+            enabled: true
+            par_cnt: i == 8
+            par_slice: i == 1 # p is tainted
+
+          flac_dmx_process_filter:
+            symbols: [flac_dmx_process]
+            synopsis: int64_t flac_dmx_process(int64_t arg1)
+            enabled: true
+            par_cnt: i == 1
+            par_slice: i == 1 # taint the GF_Filter* parameter
+
+          gpac_mp4client_argv_source:
+            symbols: [mp4client_main]
+            synopsis: uint64_t mp4client_main(int32_t arg1, void* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 2 # taint the contents of argv
+
+          kitty_handle_add_command_payload_source:
+            symbols: [handle_add_command]
+            synopsis: "Image* handle_add_command(GraphicsManager* self, const GraphicsCommand* g, const uint8_t* payload, bool* is_dirty, uint32_t iid)"
+            enabled: true
+            par_cnt: i == 5
+            par_slice: i == 3 # taint the payload buffer (attacker-controlled)
+
+          libyang_make_canonical_source:
+            symbols: [make_canonical]
+            synopsis: "int make_canonical(ly_ctx* ctx, int type, const char** value, void* data1, void* data2)"
+            enabled: true
+            par_cnt: i == 5
+            par_slice: i == 3 # attacker-controlled *value
+
+          naviserver_chunkeddecode_source:
+            symbols: [ChunkedDecode]
+            synopsis: uint64_t ChunkedDecode(int64_t* arg1, char arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          njs_module_path_source:
+            symbols: [njs_module_path]
+            synopsis: int64_t njs_module_path(int64_t arg1, int64_t* arg2, int64_t* arg3)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 2
+
+          pgxtoimage_source:
+            symbols: [pgxtoimage]
+            synopsis: void* pgxtoimage(char* arg1, int32_t* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          patch_do_ed_script_source:
+            symbols: [do_ed_script]
+            synopsis: FILE* do_ed_script(int64_t arg1, char* arg2, char* arg3, FILE* arg4)
+            enabled: true
+            par_cnt: i == 4
+            par_slice: i == 1 or i == 2 # taint inname and outname
+
+          adare2_download_source:
+            symbols: [download]
+            synopsis: int download(struct SPDBDownloader* pd)
+            enabled: true
+            par_cnt: i == 1
+            par_slice: i == 1
+
+          shadowsocks_build_config_source:
+            symbols: [build_config]
+            synopsis: int64_t build_config(char* arg1, int64_t* arg2, int64_t* arg3)
+            enabled: true
+            par_cnt: i >=2
+            par_slice: "true"
+
+          mapserver_timestring_source:
+            symbols: [msPostGISLayerSetTimeFilter]
+            synopsis: int msPostGISLayerSetTimeFilter(layerObj* lp, const char* timestring, const char* timefield)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 2 # timestring is attacker-controlled
+
+          extractFileTo:
+            symbols:
+              - extractFileTo
+            synopsis:
+              uint64_t extractFileTo(zip* arg1, class std::string const& arg2,
+              class std::string& arg3, char* arg4, uint64_t arg5)
+            enabled: true
+            par_cnt: i == 5
+            par_slice: "False"
+
+          ntp_saveconfig_source:
+            symbols: [save_config]
+            synopsis: uint32_t* save_config(int64_t arg1, int32_t arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          pigz_process_source:
+            symbols: [process]
+            synopsis: uint64_t process(char* arg1, int128_t arg2 @ v0, int128_t arg3 @ v1, int128_t arg4 @ v2, int128_t arg5 @ v3, int128_t arg6 @ v4, int128_t arg7 @ v5, int128_t arg8 @ v6, int128_t arg9 @ v7)
+            enabled: true
+            par_cnt: i == 9
+            par_slice: i == 1
+
+          uftpd_compose_path_source_path:
+            symbols: [compose_path]
+            synopsis: void* compose_path(char* arg1, char* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 2
+
+          pam_u2f_get_devices_from_authfile_source:
+            symbols: [get_devices_from_authfile]
+            synopsis: uint64_t get_devices_from_authfile(char* arg1, int64_t arg2, int32_t arg3, int32_t arg4, FILE* arg5, void* arg6, int32_t* arg7)
+            enabled: true
+            par_cnt: i == 7
+            par_slice: i == 1
+
+          pdf_load_pages_kids_source:
+            symbols: [pdf_load_pages_kids]
+            synopsis: int64_t pdf_load_pages_kids(FILE* arg1, int32_t* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          uftpd_handle_port_source:
+            symbols: [handle_PORT]
+            synopsis: uint64_t handle_PORT(int32_t* arg1, char* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          vlc_rtp_packetize_xiph_config_source:
+            symbols: [rtp_packetize_xiph_config]
+            synopsis: int64_t rtp_packetize_xiph_config(int64_t arg1, char* arg2, int64_t arg3)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 1
+
+          weechat_mode_source:
+            symbols: [irc_mode_channel_update]
+            synopsis: char* irc_mode_channel_update(int64_t arg1, int64_t* arg2, char arg3, char arg4, char* arg5)
+            enabled: true
+            par_cnt: i == 5
+            par_slice: i == 4
+
+          radvd_set_interface_var_source:
+            symbols: [set_interface_var]
+            enabled: true
+            synopsis: int64_t set_interface_var(int64_t arg1, char* arg2, int64_t arg3, int32_t arg4)
+            par_cnt: i == 4
+            par_slice: [0, 1, 2]
+
+sinks:
+  primevul:
+    categories:
+      manual:
+        functions:
+          p_buf_push_tmp_char:
+            symbols:
+              - p_buf_push_tmp_char
+              - _p_buf_push_tmp_char
+              - __p_buf_push_tmp_char
+              - p_buf_push_tmp_char@plt
+              - __builtin_p_buf_push_tmp_char
+            synopsis: void p_buf_push_tmp_char(void* buf, char c)
+            enabled: true
+            par_cnt: i >= 2
+            par_slice: "True"
+
+          sscanf:
+            symbols:
+              - sscanf
+              - __isoc99_sscanf
+              - __builtin_sscanf
+            synopsis: int sscanf(const char* str, const char* fmt, ...)
+            enabled: true
+            par_cnt: i >= 1
+            par_slice: i == 1
+
+          nlist_strtab_index:
+            symbols: [strtab]
+            synopsis: char* name = strtab + s->st_name
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 2
+
+          strchr:
+            symbols: [strchr]
+            synopsis: int64_t ng_pkt(int32_t** arg1, int64_t arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 0 # attacker-controlled line pointer in strchr(s, ' ')
+            # used as sink for CWE-125 unbounded search on tainted input
+
+          plist_from_bin:
+            symbols:
+              - plist_from_bin
+            synopsis: void plist_from_bin(const char* buf, uint32_t len, plist_t* out)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 1 # the tainted buffer
+
+          plist_from_xml:
+            symbols:
+              - plist_from_xml
+            synopsis: void plist_from_xml(const char* buf, uint32_t len, plist_t* out)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 1
+
+          CopyXPMColor:
+            symbols: [CopyXPMColor]
+            synopsis: int64_t CopyXPMColor(void* arg1, void* arg2, int64_t arg3)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 2 # src is attacker-controlled
+
+          read_overflow:
+            symbols: [read, __read]
+            synopsis: ssize_t read(int32_t fd, void* buf, size_t nbytes)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 1 # the destination buffer 'packet'
+
+          fread:
+            symbols: [fread, _fread, __fread_chk]
+            synopsis: size_t fread(void* buf, size_t size, size_t count, FILE* fp)
+            enabled: true
+            par_cnt: i == 4
+            par_slice: i == 1 # data copied here (buffer argument)
+
+          unsafe_write:
+            symbols: [unsafe_write]
+            synopsis: char* unsafe_write(void* arg1, int32_t arg2, char arg3)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 3 # the buffer
+
+          gpmf_mp4_sink_metaoffset_write:
+            symbols: [sink_metaoffset_write]
+            synopsis: int64_t* sink_metaoffset_write(int64_t arg1, int32_t arg2, int64_t arg3)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 3 # attacker-controlled value flows into final store
+
+          pgxtoimage_sink:
+            symbols: [fscanf, __isoc99_fscanf]
+            synopsis: int32_t __isoc99_fscanf(FILE* stream, char const* format, ...)
+            enabled: true
+            par_cnt: i >= 2
+            par_slice: i == 2
+
+          radare2_download_sink_curl:
+            symbols: [r_sys_cmd]
+            synopsis: int r_sys_cmd(const char* cmd)
+            enabled: true
+            par_cnt: i == 1
+            par_slice: i == 1 # curl_cmd is attacker-controlled
+
+          ntp_filesystem_sink:
+            symbols: [open, _open, __open]
+            synopsis: int32_t open(char const* file, int32_t oflag, ...)
+            enabled: true
+            par_cnt: i == 3
+            par_slice: i == 1
+
+          uftpd_stat_sink:
+            symbols: [stat, __stat, _stat]
+            synopsis: int stat(const char* pathname, struct stat* buf)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1 # stat(dir, ...) takes tainted path
+
+          uftpd_realpath_sink:
+            symbols: [realpath, __realpath, _realpath]
+            synopsis: int64_t realpath(int64_t* arg1, uint8_t* arg2)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1
+
+          radvd_access_sink:
+            symbols: [access]
+            synopsis: int32_t access(char const* file, int32_t type)
+            enabled: true
+            par_cnt: i == 2
+            par_slice: i == 1

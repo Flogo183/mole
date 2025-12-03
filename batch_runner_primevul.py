@@ -139,10 +139,16 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
     Disable all sources/sinks in the config, then enable only the specified ones.
     This modifies the config_model in-place, just like Binary Ninja's UI does.
 
+    If a specified source is not found, ALL sources will be enabled as a fallback.
+    If a specified sink is not found, ALL sinks will be enabled as a fallback.
+
     Args:
         config_model: The ConfigModel to modify
         source_functions: List of source function names to enable (e.g., ['filename', 'fread'])
         sink_functions: List of sink function names to enable (e.g., ['malloc', 'strcpy'])
+
+    Returns:
+        dict: Status info with 'sources_fallback' and 'sinks_fallback' booleans
 
     Example:
         apply_source_sink_filter(config_model, ['filename'], ['malloc'])
@@ -157,11 +163,37 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
     log.info("PrimeVulBatchRunner", f"Available sources: {all_source_names}")
     log.info("PrimeVulBatchRunner", f"Available sinks: {all_sink_names}")
 
-    # Disable ALL sources
+    # Track if we need to fallback to enabling all
+    sources_fallback = False
+    sinks_fallback = False
+
+    # Check if all specified sources exist
+    if source_functions:
+        available_sources = {func.name for func in all_sources}
+        missing_sources = [s for s in source_functions if s not in available_sources]
+        if missing_sources:
+            log.warn(
+                "PrimeVulBatchRunner",
+                f"Source(s) not found: {missing_sources}. Enabling ALL sources as fallback.",
+            )
+            sources_fallback = True
+
+    # Check if all specified sinks exist
+    if sink_functions:
+        available_sinks = {func.name for func in all_sinks}
+        missing_sinks = [s for s in sink_functions if s not in available_sinks]
+        if missing_sinks:
+            log.warn(
+                "PrimeVulBatchRunner",
+                f"Sink(s) not found: {missing_sinks}. Enabling ALL sinks as fallback.",
+            )
+            sinks_fallback = True
+
+    # Disable ALL sources first
     for func in all_sources:
         func.enabled = False
 
-    # Disable ALL sinks
+    # Disable ALL sinks first
     for func in all_sinks:
         func.enabled = False
 
@@ -170,8 +202,15 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
         f"Disabled all {len(all_sources)} sources and {len(all_sinks)} sinks",
     )
 
-    # Enable only the specified sources
-    if source_functions:
+    # Handle sources: either enable all (fallback) or enable only specified
+    if sources_fallback:
+        for func in all_sources:
+            func.enabled = True
+        log.info(
+            "PrimeVulBatchRunner",
+            f"FALLBACK: Enabled ALL {len(all_sources)} sources",
+        )
+    elif source_functions:
         available_sources = {func.name for func in all_sources}
         for source_name in source_functions:
             if source_name in available_sources:
@@ -180,14 +219,16 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
                         func.enabled = True
                         log.info("PrimeVulBatchRunner", f"Enabled source: {func.name}")
                         break
-            else:
-                log.warn(
-                    "PrimeVulBatchRunner",
-                    f"Source '{source_name}' not found in YAML configs. Available: {all_source_names}",
-                )
 
-    # Enable only the specified sinks
-    if sink_functions:
+    # Handle sinks: either enable all (fallback) or enable only specified
+    if sinks_fallback:
+        for func in all_sinks:
+            func.enabled = True
+        log.info(
+            "PrimeVulBatchRunner",
+            f"FALLBACK: Enabled ALL {len(all_sinks)} sinks",
+        )
+    elif sink_functions:
         available_sinks = {func.name for func in all_sinks}
         for sink_name in sink_functions:
             if sink_name in available_sinks:
@@ -196,11 +237,8 @@ def apply_source_sink_filter(config_model, source_functions=None, sink_functions
                         func.enabled = True
                         log.info("PrimeVulBatchRunner", f"Enabled sink: {func.name}")
                         break
-            else:
-                log.warn(
-                    "PrimeVulBatchRunner",
-                    f"Sink '{sink_name}' not found in YAML configs. Available: {all_sink_names}",
-                )
+
+    return {"sources_fallback": sources_fallback, "sinks_fallback": sinks_fallback}
 
 
 def init(path_ctr):
@@ -288,10 +326,26 @@ def init(path_ctr):
                     )
 
                     # Apply the filter (disable all, enable only specified)
-                    apply_source_sink_filter(config_model, sources, sinks)
-                    log.info(
-                        "PrimeVulBatchRunner", f"Applied source/sink filter for {fname}"
+                    # If a source/sink is not found, it will fallback to enabling ALL
+                    filter_status = apply_source_sink_filter(
+                        config_model, sources, sinks
                     )
+
+                    if (
+                        filter_status["sources_fallback"]
+                        or filter_status["sinks_fallback"]
+                    ):
+                        log.info(
+                            "PrimeVulBatchRunner",
+                            f"Applied source/sink filter for {fname} with fallbacks - "
+                            f"sources_fallback={filter_status['sources_fallback']}, "
+                            f"sinks_fallback={filter_status['sinks_fallback']}",
+                        )
+                    else:
+                        log.info(
+                            "PrimeVulBatchRunner",
+                            f"Applied source/sink filter for {fname}",
+                        )
                 else:
                     # Enable-all mode OR binary not found in JSON
                     if len(self.source_sink_mapping) == 0:
