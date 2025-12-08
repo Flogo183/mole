@@ -202,8 +202,8 @@ def init(path_ctr):
             processed_binaries = 0
 
             # Hardcoded paths for now
-            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_CASTLE/Compiled_CASTLE_O0-s"
-            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Results_Diff_Opt_CASTLE/Results_CASTLE_O0-s"
+            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_CASTLE/Compiled_CASTLE_O0"
+            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results/Baseline_Results_CASTLE/CASTLE_baseline_evaluation_qwen3_coder_480b_a35b_Instruct_temp=02"
 
             os.makedirs(OUTPUT_DIR, exist_ok=True)
 

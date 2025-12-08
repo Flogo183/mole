@@ -66,8 +66,20 @@ class VulnerabilityClass(IndexedLabeledEnum):
         19,
         "Memory Allocation with Excessive Size Value (CWE-789)",
     )
+    INJECTION_NEUTRALIZATION = (
+        20,
+        "Improper Neutralization of Special Elements in Output (CWE-74)",
+    )
+    OUT_OF_BOUNDS_READ = (
+        21,
+        "Out-of-Bounds Read (CWE-125)",
+    )
+    OUT_OF_BOUNDS_WRITE = (
+        22,
+        "Out-of-Bounds Write (CWE-787)",
+    )
 
-    OTHER = (20, "Other / Unknown")
+    OTHER = (23, "Other / Unknown")
 
 
 class VulnerabilityReport(BaseModel):

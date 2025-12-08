@@ -1002,15 +1002,17 @@ def init(path_ctr):
         Shows a UI dialog to select which CWE to process.
         """
         # Hardcoded paths - adjust as needed
-        BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_Juliets/compiled_binaries_CURATED"
+        BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_Juliet/compiled_Juliet_O0"
+        JSON_MAPPING_BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Source_Sink_mappings/Source_Sink_Mappings_CUT"
 
-        # Ask user to choose mode: JSON mapping or enable all
+        # Ask user to choose mode: JSON mapping, enable all, or auto-all CWEs
         mode_choice = interaction.get_choice_input(
             "Select Source/Sink Mode",
             "choices",
             [
                 "Use JSON mapping (per-binary filtering)",
                 "Enable ALL sources/sinks (comprehensive scan)",
+                "Auto-run ALL CWEs with JSON mappings",
             ],
         )
 
@@ -1019,6 +1021,7 @@ def init(path_ctr):
             return
 
         use_json_mapping = mode_choice == 0
+        auto_all_cwes = mode_choice == 2
 
         # Scan for available CWEs in both directory structures:
         # 1. Top50/Top100/Top150 folders containing CWEs
@@ -1066,7 +1069,67 @@ def init(path_ctr):
         # Sort CWEs for nice display
         cwe_list = sorted(list(available_cwes))
 
-        # Show choice dialog
+        # Handle auto-all CWEs mode
+        if auto_all_cwes:
+            # Find all CWEs that have JSON mapping files
+            cwes_with_mappings = []
+            cwes_without_mappings = []
+
+            for cwe in cwe_list:
+                json_path = os.path.join(
+                    JSON_MAPPING_BASE_DIR,
+                    f"Juliet{cwe}_source_sink_mapping_CURATED.json",
+                )
+                if os.path.exists(json_path):
+                    cwes_with_mappings.append(cwe)
+                else:
+                    cwes_without_mappings.append(cwe)
+
+            if not cwes_with_mappings:
+                log.error("JulietBatchRunner", "No CWEs with JSON mappings found")
+                interaction.show_message_box(
+                    "No JSON Mappings Found",
+                    f"Could not find any JSON mapping files in:\n{JSON_MAPPING_BASE_DIR}\n\nExpected format: Juliet<CWE>_source_sink_mapping_CURATED.json",
+                    buttons=interaction.MessageBoxButtonSet.OKButtonSet,
+                )
+                return
+
+            log.info(
+                "JulietBatchRunner",
+                f"Found {len(cwes_with_mappings)} CWEs with JSON mappings: {cwes_with_mappings}",
+            )
+            if cwes_without_mappings:
+                log.warn(
+                    "JulietBatchRunner",
+                    f"Skipping {len(cwes_without_mappings)} CWEs without mappings: {cwes_without_mappings}",
+                )
+
+            # Confirm with user
+            confirm = interaction.show_message_box(
+                "Confirm Auto-Run All CWEs",
+                f"This will process {len(cwes_with_mappings)} CWEs:\n\n"
+                f"{', '.join(cwes_with_mappings)}\n\n"
+                f"This may take a long time. Continue?",
+                buttons=interaction.MessageBoxButtonSet.YesNoButtonSet,
+            )
+
+            if confirm != interaction.MessageBoxButtonResult.YesButton:
+                log.info("JulietBatchRunner", "User cancelled auto-run all CWEs")
+                return
+
+            # Start the auto-all task
+            log.info(
+                "JulietBatchRunner",
+                f"Starting auto-run for {len(cwes_with_mappings)} CWEs...",
+            )
+
+            task = JulietBatchRunnerAllCWEsTask(
+                path_ctr, cwes_with_mappings, JSON_MAPPING_BASE_DIR
+            )
+            task.start()
+            return
+
+        # Show choice dialog for single CWE mode
         cwe_choice = interaction.get_choice_input(
             "Select CWE to Process", "choices", cwe_list
         )
@@ -1082,7 +1145,10 @@ def init(path_ctr):
         if use_json_mapping:
             # Build JSON mapping path based on selected CWE
             # Example: CWE121 -> juliet_source_sink_mapping_CWE121.json
-            JSON_MAPPING_PATH = f"/Users/flaviogottschalk/dev/BachelorArbeit/Source_Sink_mappings/Source_Sink_Mappings_CUT/Juliet{selected_cwe}_source_sink_mapping_CURATED.json"
+            JSON_MAPPING_PATH = os.path.join(
+                JSON_MAPPING_BASE_DIR,
+                f"Juliet{selected_cwe}_source_sink_mapping_CURATED.json",
+            )
 
             # Load the source/sink mapping from JSON
             source_sink_mapping = load_source_sink_mapping(JSON_MAPPING_PATH)
@@ -1110,6 +1176,532 @@ def init(path_ctr):
 
         task = JulietBatchRunnerTask(path_ctr, selected_cwe, source_sink_mapping)
         task.start()
+
+    class JulietBatchRunnerAllCWEsTask(BackgroundTask):
+        """
+        Background task for running batch analysis on ALL CWEs in Juliet test suite.
+        Automatically iterates through all CWEs that have JSON mapping files.
+        """
+
+        def __init__(self, path_ctr, cwe_list, json_mapping_base_dir):
+            super().__init__(
+                f"Running Juliet batch analysis for ALL {len(cwe_list)} CWEs...", True
+            )
+            self.path_ctr = path_ctr
+            self.cwe_list = cwe_list
+            self.json_mapping_base_dir = json_mapping_base_dir
+            self.log_capture = LogCapture()
+
+            # Save the ORIGINAL config state once at initialization
+            config_model = self.path_ctr.config_ctr.config_model
+            self.original_states = {}
+
+            for func in config_model.get_functions(fun_type="Sources"):
+                self.original_states[("source", func.name)] = func.enabled
+
+            for func in config_model.get_functions(fun_type="Sinks"):
+                self.original_states[("sink", func.name)] = func.enabled
+
+            log.info(
+                "JulietBatchRunner",
+                f"Saved original state: {len([k for k in self.original_states.keys() if k[0] == 'source'])} sources, "
+                f"{len([k for k in self.original_states.keys() if k[0] == 'sink'])} sinks",
+            )
+
+        def run(self):
+            """
+            Run batch processing for all CWEs sequentially.
+            """
+            overall_start_time = time.time()
+            cwe_results = []
+            total_cwes = len(self.cwe_list)
+            processed_cwes = 0
+            total_binaries_all = 0
+            total_paths_all = 0
+
+            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_Juliet/compiled_Juliet_O0"
+            OUTPUT_BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results/Baseline_Results_Juliet/evaluate_qwen3-coder:free_temp_02_baseline_juliet"
+
+            log.info(
+                "JulietBatchRunner",
+                f"Starting auto-run for {total_cwes} CWEs: {self.cwe_list}",
+            )
+
+            for cwe_idx, target_cwe in enumerate(self.cwe_list):
+                if self.cancelled:
+                    log.info("JulietBatchRunner", "Auto-run cancelled by user")
+                    break
+
+                self.progress = f"Processing {target_cwe} ({cwe_idx + 1}/{total_cwes})"
+                log.info(
+                    "JulietBatchRunner",
+                    f"=== Starting CWE {cwe_idx + 1}/{total_cwes}: {target_cwe} ===",
+                )
+
+                cwe_start_time = time.time()
+
+                # Load JSON mapping for this CWE
+                json_path = os.path.join(
+                    self.json_mapping_base_dir,
+                    f"Juliet{target_cwe}_source_sink_mapping_CURATED.json",
+                )
+                source_sink_mapping = load_source_sink_mapping(json_path)
+
+                if not source_sink_mapping:
+                    log.warn(
+                        "JulietBatchRunner",
+                        f"Could not load mapping for {target_cwe}, skipping",
+                    )
+                    cwe_results.append(
+                        {
+                            "cwe": target_cwe,
+                            "status": "skipped",
+                            "reason": "mapping_load_failed",
+                            "binaries_processed": 0,
+                            "paths_found": 0,
+                            "time_seconds": 0,
+                        }
+                    )
+                    continue
+
+                # Process this CWE using similar logic to JulietBatchRunnerTask.run()
+                cwe_binaries = 0
+                cwe_paths = 0
+
+                # Detect directory structure
+                has_top_folders = False
+                top_folders = ["Top50", "Top100", "Top150"]
+
+                for top_folder in top_folders:
+                    if os.path.exists(os.path.join(BASE_DIR, top_folder)):
+                        has_top_folders = True
+                        break
+
+                direct_cwe_path = os.path.join(BASE_DIR, target_cwe)
+                has_direct_cwe = os.path.exists(direct_cwe_path)
+
+                # Build list of paths to process
+                paths_to_process = []
+
+                if has_top_folders:
+                    for top_folder in top_folders:
+                        top_path = os.path.join(BASE_DIR, top_folder)
+                        if not os.path.exists(top_path):
+                            continue
+                        target_cwe_path = os.path.join(top_path, target_cwe)
+                        if os.path.exists(target_cwe_path):
+                            paths_to_process.append((top_folder, target_cwe_path))
+
+                if has_direct_cwe:
+                    paths_to_process.append((None, direct_cwe_path))
+
+                if not paths_to_process:
+                    log.warn(
+                        "JulietBatchRunner",
+                        f"No binary folders found for {target_cwe}, skipping",
+                    )
+                    cwe_results.append(
+                        {
+                            "cwe": target_cwe,
+                            "status": "skipped",
+                            "reason": "no_binary_folders",
+                            "binaries_processed": 0,
+                            "paths_found": 0,
+                            "time_seconds": 0,
+                        }
+                    )
+                    continue
+
+                # Process binaries for this CWE
+                for top_folder, cwe_path in paths_to_process:
+                    if self.cancelled:
+                        break
+
+                    if top_folder:
+                        output_cwe_dir = os.path.join(
+                            OUTPUT_BASE_DIR, top_folder, target_cwe
+                        )
+                    else:
+                        output_cwe_dir = os.path.join(OUTPUT_BASE_DIR, target_cwe)
+
+                    os.makedirs(output_cwe_dir, exist_ok=True)
+
+                    for category in ["good_versions", "bad_versions"]:
+                        if self.cancelled:
+                            break
+
+                        category_path = os.path.join(cwe_path, category)
+                        if not os.path.exists(category_path):
+                            continue
+
+                        output_category_dir = os.path.join(output_cwe_dir, category)
+                        os.makedirs(output_category_dir, exist_ok=True)
+
+                        binaries = sorted(
+                            [
+                                f
+                                for f in os.listdir(category_path)
+                                if os.path.isfile(os.path.join(category_path, f))
+                            ]
+                        )
+
+                        for fname in binaries:
+                            if self.cancelled:
+                                break
+
+                            fpath = os.path.join(category_path, fname)
+                            self.progress = (
+                                f"{target_cwe} ({cwe_idx + 1}/{total_cwes}) - {fname}"
+                            )
+
+                            # Process binary (inline version of process_binary)
+                            success, num_paths = self._process_binary_inline(
+                                fpath, fname, output_category_dir, source_sink_mapping
+                            )
+
+                            if success:
+                                cwe_binaries += 1
+                                cwe_paths += num_paths
+
+                cwe_elapsed = time.time() - cwe_start_time
+                processed_cwes += 1
+                total_binaries_all += cwe_binaries
+                total_paths_all += cwe_paths
+
+                cwe_results.append(
+                    {
+                        "cwe": target_cwe,
+                        "status": "completed",
+                        "binaries_processed": cwe_binaries,
+                        "paths_found": cwe_paths,
+                        "time_seconds": round(cwe_elapsed, 2),
+                    }
+                )
+
+                log.info(
+                    "JulietBatchRunner",
+                    f"=== Completed {target_cwe}: {cwe_binaries} binaries, {cwe_paths} paths in {cwe_elapsed:.2f}s ===",
+                )
+
+            # Save overall summary
+            overall_elapsed = time.time() - overall_start_time
+            overall_minutes = overall_elapsed / 60
+
+            overall_summary = {
+                "mode": "auto_all_cwes",
+                "total_cwes_attempted": total_cwes,
+                "total_cwes_processed": processed_cwes,
+                "total_binaries_processed": total_binaries_all,
+                "total_paths_found": total_paths_all,
+                "total_time_seconds": round(overall_elapsed, 2),
+                "total_time_formatted": f"{overall_minutes:.2f}m ({overall_elapsed:.2f}s)",
+                "cancelled": self.cancelled,
+                "timestamp": datetime.now().isoformat(),
+                "cwe_results": cwe_results,
+            }
+
+            summary_file = os.path.join(OUTPUT_BASE_DIR, "ALL_CWEs_batch_summary.json")
+            try:
+                with open(summary_file, "w") as f:
+                    json.dump(overall_summary, f, indent=2)
+                log.info(
+                    "JulietBatchRunner", f"Saved overall summary to {summary_file}"
+                )
+            except Exception as e:
+                log.error("JulietBatchRunner", f"Failed to save overall summary: {e}")
+
+            log.info(
+                "JulietBatchRunner",
+                f"Auto-run completed! Processed {processed_cwes}/{total_cwes} CWEs, "
+                f"{total_binaries_all} binaries, {total_paths_all} paths in {overall_minutes:.2f}m",
+            )
+
+        def _process_binary_inline(self, fpath, fname, output_dir, source_sink_mapping):
+            """
+            Process a single binary (simplified inline version).
+            Returns (success, num_paths).
+            """
+            num_paths = 0
+            bv = None
+
+            try:
+                bv = load(fpath)
+                if not bv:
+                    log.warn("JulietBatchRunner", f"Could not open {fname}")
+                    return False, 0
+                bv.update_analysis_and_wait()
+            except Exception as e:
+                log.error("JulietBatchRunner", f"Failed to load {fname}: {e}")
+                return False, 0
+
+            try:
+                config_model = self.path_ctr.config_ctr.config_model
+
+                # Apply source/sink filter
+                if fname in source_sink_mapping:
+                    mapping = source_sink_mapping[fname]
+                    sources = mapping.get("sources", [])
+                    sinks = mapping.get("sinks", [])
+                    apply_source_sink_filter(config_model, sources, sinks)
+                else:
+                    # Enable all if not in mapping
+                    for func in config_model.get_functions(fun_type="Sources"):
+                        func.enabled = True
+                    for func in config_model.get_functions(fun_type="Sinks"):
+                        func.enabled = True
+
+                self.path_ctr._bv = bv
+
+                if self.path_ctr.path_tree_view:
+                    self.path_ctr.path_tree_view.clear_all_paths()
+                    time.sleep(0.1)
+                else:
+                    return False, 0
+
+                # Start capturing logs for debugging no-paths cases
+                self.log_capture.start_capture()
+
+                # Find paths
+                self.path_ctr.find_paths()
+
+                while not self.path_ctr.thread_finished:
+                    if self.cancelled:
+                        self.log_capture.stop_capture()
+                        return False, 0
+                    time.sleep(0.5)
+
+                # Stop log capture and get captured logs
+                self.log_capture.stop_capture()
+                captured_logs = self.log_capture.get_logs()
+
+                if not self.path_ctr.path_tree_view:
+                    return False, 0
+
+                path_ids = list(self.path_ctr.path_tree_view.model.path_ids)
+
+                if not path_ids:
+                    # No paths found - collect detailed debug info
+                    detected_sources = []
+                    detected_sinks = []
+
+                    try:
+                        from mole.common.helper.symbol import SymbolHelper
+
+                        # Get configured source functions and check which are in the binary
+                        src_funs = self.path_ctr.config_ctr.config_model.get_functions(
+                            fun_type="Sources", fun_enabled=True
+                        )
+                        for src_fun in src_funs:
+                            code_refs = SymbolHelper.get_code_refs(bv, src_fun.symbols)
+                            for symbol_name, refs in code_refs.items():
+                                if refs:
+                                    detected_sources.append(symbol_name)
+
+                        # Get configured sink functions and check which are in the binary
+                        snk_funs = self.path_ctr.config_ctr.config_model.get_functions(
+                            fun_type="Sinks", fun_enabled=True
+                        )
+                        for snk_fun in snk_funs:
+                            code_refs = SymbolHelper.get_code_refs(bv, snk_fun.symbols)
+                            for symbol_name, refs in code_refs.items():
+                                if refs:
+                                    detected_sinks.append(symbol_name)
+
+                    except Exception as e:
+                        log.warn(
+                            "JulietBatchRunner",
+                            f"Could not retrieve detected source/sink info: {e}",
+                        )
+
+                    # Remove duplicates and sort for consistency
+                    detected_sources = sorted(list(set(detected_sources)))
+                    detected_sinks = sorted(list(set(detected_sinks)))
+
+                    # Create informative result even when no paths found
+                    no_paths_result = {
+                        "binary_file": fname,
+                        "status": "no_paths_detected",
+                        "detected_sources": detected_sources
+                        if detected_sources
+                        else ["none_detected"],
+                        "detected_sinks": detected_sinks
+                        if detected_sinks
+                        else ["none_detected"],
+                        "message": f"No vulnerability paths detected between sources and sinks in {fname}",
+                    }
+
+                    # Save the informative result
+                    out_file = os.path.join(output_dir, f"{fname}.json")
+                    with open(out_file, "w") as fp:
+                        json.dump([no_paths_result], fp, indent=2)
+                    log.info("JulietBatchRunner", f"Saved no-paths info to {out_file}")
+
+                    # Save debug logs for no-paths case
+                    if captured_logs:
+                        debug_log_data = {
+                            "binary_file": fname,
+                            "status": "debug_logs_no_paths",
+                            "analysis_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "detected_sources": detected_sources,
+                            "detected_sinks": detected_sinks,
+                            "debug_logs": self.log_capture.get_debug_summary(),
+                            "log_statistics": {
+                                "total_log_entries": len(captured_logs),
+                                "log_levels": {
+                                    level: sum(
+                                        1
+                                        for log_entry in captured_logs
+                                        if log_entry.get("level") == level
+                                    )
+                                    for level in ["DEBUG", "INFO", "WARNING", "ERROR"]
+                                },
+                                "capture_status": "enabled"
+                                if len(captured_logs) > 0
+                                else "no_logs_captured",
+                            },
+                        }
+
+                        debug_log_file = os.path.join(
+                            output_dir, f"{fname}_debug_logs.json"
+                        )
+                        with open(debug_log_file, "w") as fp:
+                            json.dump(debug_log_data, fp, indent=2)
+                        log.info(
+                            "JulietBatchRunner",
+                            f"Saved debug logs to {debug_log_file}",
+                        )
+
+                    return True, 0
+
+                num_paths = len(path_ids)
+
+                # Run AI analysis
+                self.path_ctr.analyze_paths(path_ids)
+
+                while not self.path_ctr.thread_finished:
+                    if self.cancelled:
+                        return False, num_paths
+                    time.sleep(0.5)
+
+                # Collect results
+                results = []
+                for pid in path_ids:
+                    try:
+                        path = self.path_ctr.path_tree_view.get_path(pid)
+                        if not path:
+                            continue
+
+                        import math
+
+                        num_instructions = (
+                            len(path.insts) if hasattr(path, "insts") else 0
+                        )
+                        num_phi_calls = len(path.phiis) if hasattr(path, "phiis") else 0
+                        num_branches = len(path.bdeps) if hasattr(path, "bdeps") else 0
+                        complexity_score = (
+                            0.5 * math.log(1 + num_branches)
+                            + 0.3 * math.log(1 + num_phi_calls)
+                            + 0.2 * math.log(1 + num_instructions)
+                        )
+
+                        simplified_data = {
+                            "binary_file": fname,
+                            "path_id": pid,
+                            "source": {
+                                "function": path.src_sym_name,
+                                "address": hex(path.src_sym_addr),
+                                "parameter_index": path.src_par_idx,
+                            },
+                            "sink": {
+                                "function": path.snk_sym_name,
+                                "address": hex(path.snk_sym_addr),
+                                "parameter_index": path.snk_par_idx,
+                            },
+                            "comment": path.comment if path.comment else None,
+                            "path_complexity": {
+                                "instructions": num_instructions,
+                                "phi_calls": num_phi_calls,
+                                "branches": num_branches,
+                                "structural_complexity_score": round(
+                                    complexity_score, 4
+                                ),
+                            },
+                        }
+
+                        if hasattr(path, "ai_report") and path.ai_report:
+                            ai_data = {
+                                "truePositive": path.ai_report.truePositive,
+                                "vulnerabilityClass": str(
+                                    path.ai_report.vulnerabilityClass
+                                )
+                                if hasattr(path.ai_report, "vulnerabilityClass")
+                                else None,
+                                "shortExplanation": path.ai_report.shortExplanation,
+                                "severityLevel": str(path.ai_report.severityLevel)
+                                if hasattr(path.ai_report, "severityLevel")
+                                else None,
+                                "inputExample": path.ai_report.inputExample,
+                                "path_id": path.ai_report.path_id,
+                                "model": path.ai_report.model,
+                                "Convesation turns": path.ai_report.turns,
+                                "tool_calls": path.ai_report.tool_calls,
+                                "tools_used": path.ai_report.tools_used
+                                if hasattr(path.ai_report, "tools_used")
+                                else [],
+                                "prompt_tokens": path.ai_report.prompt_tokens,
+                                "completion_tokens": path.ai_report.completion_tokens,
+                                "total_tokens": path.ai_report.total_tokens,
+                                "temperature": path.ai_report.temperature,
+                                "timestamp": path.ai_report.timestamp.isoformat()
+                                if hasattr(path.ai_report.timestamp, "isoformat")
+                                else str(path.ai_report.timestamp),
+                            }
+                            simplified_data["ai_report"] = ai_data
+                        else:
+                            simplified_data["ai_report"] = None
+
+                        results.append(simplified_data)
+                    except Exception as e:
+                        log.error(
+                            "JulietBatchRunner", f"Failed to export path {pid}: {e}"
+                        )
+                        continue
+
+                out_file = os.path.join(output_dir, f"{fname}.json")
+                with open(out_file, "w") as fp:
+                    json.dump(results, fp, indent=2)
+
+                if self.path_ctr.path_tree_view:
+                    self.path_ctr.path_tree_view.clear_all_paths()
+
+                return True, num_paths
+
+            except Exception as e:
+                log.error("JulietBatchRunner", f"Error processing {fname}: {e}")
+                return False, 0
+
+            finally:
+                # Restore original states
+                try:
+                    if hasattr(self, "original_states") and self.original_states:
+                        config_model = self.path_ctr.config_ctr.config_model
+                        for func in config_model.get_functions(fun_type="Sources"):
+                            key = ("source", func.name)
+                            if key in self.original_states:
+                                func.enabled = self.original_states[key]
+                        for func in config_model.get_functions(fun_type="Sinks"):
+                            key = ("sink", func.name)
+                            if key in self.original_states:
+                                func.enabled = self.original_states[key]
+                except Exception:
+                    pass
+
+                try:
+                    if bv:
+                        bv.file.close()
+                        del bv
+                except Exception:
+                    pass
 
     # Register command in BN
     PluginCommand.register(

@@ -629,7 +629,7 @@ sinks:
             symbols: [vprintf, _vprintf, __builtin_vprintf]
             synopsis: int vprintf (const char *format, va_list ap)
             enabled: false
-            par_cnt: i == 2
+            par_cnt: i >=1
             par_slice: "True"
           vwprintf:
             symbols: [vwprintf, _vwprintf, __builtin_vwprintf]

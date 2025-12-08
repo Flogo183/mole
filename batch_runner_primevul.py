@@ -845,8 +845,8 @@ def init(path_ctr):
         Start the PrimeVul batch runner as a background task.
         """
         # Hardcoded paths - adjust as needed
-        BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Extracted_PrimeVul/compiled_objects_clean_only"
-        OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/results_PrimeVul/test2"
+        BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_PrimeVul/Compiled_PrimeVul_O0"
+        OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results/Baseline_Results_PrimeVul"
 
         # Ask user to choose mode: JSON mapping or enable all
         mode_choice = interaction.get_choice_input(
