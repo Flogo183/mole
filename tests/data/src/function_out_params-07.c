@@ -14,7 +14,7 @@ int check_cmd(char* msg, char** cmd){
     }
     msg = getenv("MSG");
     if(msg != NULL){
-        printf("%s!\n", msg);
+        fprintf(stderr, "%s!\n", msg);
     }
     return -1;
 }

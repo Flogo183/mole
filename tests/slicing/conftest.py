@@ -16,7 +16,8 @@ atexit_registered = False
 
 
 def print_tested_files() -> None:
-    print(f"\nTested slicing on {len(tested_files):d} files")
+    if tested_files:  # Only print if we actually tested files
+        print(f"\nTested slicing on {len(tested_files):d} files")
     return
 
 
