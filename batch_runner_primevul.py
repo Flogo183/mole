@@ -630,6 +630,13 @@ def init(path_ctr):
                                 else str(path.ai_report.timestamp),
                             }
                             simplified_data["ai_report"] = ai_data
+
+                            # FLAVIO: Accumulate token usage
+                            self.total_prompt_tokens += path.ai_report.prompt_tokens
+                            self.total_completion_tokens += (
+                                path.ai_report.completion_tokens
+                            )
+                            self.total_tokens += path.ai_report.total_tokens
                         else:
                             simplified_data["ai_report"] = None
 
@@ -712,6 +719,10 @@ def init(path_ctr):
             batch_start_time = time.time()
             binary_timings = []
             total_paths_found = 0
+            # FLAVIO: Track token usage across all AI analyses (as instance variables for cross-method access)
+            self.total_prompt_tokens = 0
+            self.total_completion_tokens = 0
+            self.total_tokens = 0
 
             os.makedirs(self.output_dir, exist_ok=True)
 
@@ -814,6 +825,9 @@ def init(path_ctr):
                 }
                 if longest_binary[0]
                 else None,
+                "total_prompt_tokens": self.total_prompt_tokens,
+                "total_completion_tokens": self.total_completion_tokens,
+                "total_tokens": self.total_tokens,
                 "cancelled": self.cancelled,
                 "timestamp": datetime.now().isoformat(),
             }
@@ -845,8 +859,8 @@ def init(path_ctr):
         Start the PrimeVul batch runner as a background task.
         """
         # Hardcoded paths - adjust as needed
-        BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_PrimeVul/Compiled_PrimeVul_O0"
-        OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results/Baseline_Results_PrimeVul"
+        BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_PrimeVul/Compiled_PrimeVul_O0_nobuiltin_nofortify"
+        OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results_run2/Baseline_Results_PrimeVul/PrimeVul_baseline_evaluation_kimi_k2_temp=0.2"
 
         # Ask user to choose mode: JSON mapping or enable all
         mode_choice = interaction.get_choice_input(

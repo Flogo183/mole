@@ -34,11 +34,12 @@ def get_code_for_functions_containing(
     """
     log.info(
         tag,
-        f"Tool call 'get_code_for_functions_containing(addr={addr:s}, il_type={il_type:s})'",
+        f"Tool call 'get_code_for_functions_containing(addr={addr}, il_type={il_type})'",
     )
     res_code = ""
     try:
-        _addr = int(addr, 0)
+        # FLAVIO: Handle both string and int addresses from AI tool calls
+        _addr = int(addr, 0) if isinstance(addr, str) else addr
         il_type = il_type.upper()
         func_code = []
         funcs = bv.get_functions_containing(_addr)
@@ -46,16 +47,16 @@ def get_code_for_functions_containing(
             res_code = f"No functions found containing address `0x{_addr:x}`"
         else:
             for func in funcs:
-                header = f"{il_type:s} code of function `0x{func.start:x}: {str(func):s}`, which contains address `0x{_addr:x}`:"
+                header = f"{il_type} code of function `0x{func.start:x}: {str(func)}`, which contains address `0x{_addr:x}`:"
                 code = get_il_code(func, il_type)
                 func_code.append(header + "\n```\n" + code + "\n```\n")
                 log.debug(
                     tag,
-                    f"Return {il_type:s} code of function '0x{func.start:x}: {str(func):s}'",
+                    f"Return {il_type} code of function '0x{func.start:x}: {str(func)}'",
                 )
             res_code = "\n".join(func_code)
     except Exception as e:
-        msg = f"Failed to get {il_type:s} code of functions containing address '{addr:s}': {str(e):s}"
+        msg = f"Failed to get {il_type} code of functions containing address '{addr}': {e}"
         log.warn(tag, msg)
         res_code = msg
     return res_code
@@ -73,23 +74,23 @@ def get_code_for_functions_by_name(
     """
     log.info(
         tag,
-        f"Tool call 'get_code_for_functions_by_name(name={name:s}, il_type={il_type:s})'",
+        f"Tool call 'get_code_for_functions_by_name(name={name}, il_type={il_type})'",
     )
     res_code = ""
     try:
         il_type = il_type.upper()
         func_code = []
         for func in bv.get_functions_by_name(name):
-            header = f"{il_type:s} code of function `0x{func.start:x}: {str(func):s}`:"
+            header = f"{il_type} code of function `0x{func.start:x}: {str(func)}`:"
             code = get_il_code(func, il_type)
             func_code.append(header + "\n```\n" + code + "\n```\n")
             log.debug(
                 tag,
-                f"Return {il_type:s} code of function '0x{func.start:x}: {str(func):s}'",
+                f"Return {il_type} code of function '0x{func.start:x}: {str(func)}'",
             )
         res_code = "\n".join(func_code)
     except Exception as e:
-        msg = f"Failed to get {il_type:s} code of functions with name '{name:s}': {str(e):s}"
+        msg = f"Failed to get {il_type} code of functions with name '{name}': {e}"
         log.warn(tag, msg)
         res_code = msg
     return res_code
@@ -103,25 +104,26 @@ def get_callers_by_address(
     """
     This method returns the callers of functions containing address `addr`.
     """
-    log.info(tag, f"Tool call 'get_callers_by_address(addr={addr:s})'")
+    log.info(tag, f"Tool call 'get_callers_by_address(addr={addr})'")
     res_callers = ""
     try:
-        _addr = int(addr, 0)
+        # FLAVIO: Handle both string and int addresses from AI tool calls
+        _addr = int(addr, 0) if isinstance(addr, str) else addr
         callers = []
         funcs = bv.get_functions_containing(_addr)
         if funcs is None:
             res_callers = f"No functions found containing address `0x{_addr:x}`"
         else:
             for func in funcs:
-                header = f"Callers of function `0x{func.start:x}: {str(func):s}`, which contains address `0x{_addr:x}`:"
+                header = f"Callers of function `0x{func.start:x}: {str(func)}`, which contains address `0x{_addr:x}`:"
                 func_callers = "\n".join(
-                    f"- `0x{caller.start:x}`: `{caller.symbol.short_name:s}`"
+                    f"- `0x{caller.start:x}`: `{caller.symbol.short_name}`"
                     for caller in func.callers
                 )
                 callers.append(header + "\n" + func_callers + "\n")
             res_callers = "\n".join(callers)
     except Exception as e:
-        msg = f"Failed to get callers of functions containing address '{addr:s}': {str(e):s}"
+        msg = f"Failed to get callers of functions containing address '{addr}': {e}"
         log.warn(tag, msg)
         res_callers = msg
     return res_callers
@@ -135,20 +137,20 @@ def get_callers_by_name(
     """
     This method returns the callers of functions with name `name`.
     """
-    log.info(tag, f"Tool call 'get_callers_by_name(name={name:s})'")
+    log.info(tag, f"Tool call 'get_callers_by_name(name={name})'")
     res_callers = ""
     try:
         callers = []
         for func in bv.get_functions_by_name(name):
-            header = f"Callers of function `0x{func.start:x}: {str(func):s}`:"
+            header = f"Callers of function `0x{func.start:x}: {str(func)}`:"
             func_callers = "\n".join(
-                f"- `0x{caller.start:x}`: `{caller.symbol.short_name:s}`"
+                f"- `0x{caller.start:x}`: `{caller.symbol.short_name}`"
                 for caller in func.callers
             )
             callers.append(header + "\n" + func_callers + "\n")
         res_callers = "\n".join(callers)
     except Exception as e:
-        msg = f"Failed to get callers of functions with name '{name:s}': {str(e):s}"
+        msg = f"Failed to get callers of functions with name '{name}': {e}"
         log.warn(tag, msg)
         res_callers = msg
     return res_callers

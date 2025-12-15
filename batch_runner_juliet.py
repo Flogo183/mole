@@ -639,6 +639,13 @@ def init(path_ctr):
                                 else str(path.ai_report.timestamp),
                             }
                             simplified_data["ai_report"] = ai_data
+
+                            # FLAVIO: Accumulate token usage
+                            self.total_prompt_tokens += path.ai_report.prompt_tokens
+                            self.total_completion_tokens += (
+                                path.ai_report.completion_tokens
+                            )
+                            self.total_tokens += path.ai_report.total_tokens
                         else:
                             simplified_data["ai_report"] = None
 
@@ -970,6 +977,9 @@ def init(path_ctr):
                 }
                 if longest_binary[0]
                 else None,
+                "total_prompt_tokens": self.total_prompt_tokens,
+                "total_completion_tokens": self.total_completion_tokens,
+                "total_tokens": self.total_tokens,
                 "cancelled": self.cancelled,
                 "timestamp": datetime.now().isoformat(),
             }
@@ -1219,8 +1229,8 @@ def init(path_ctr):
             total_binaries_all = 0
             total_paths_all = 0
 
-            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_Juliet/compiled_Juliet_O0"
-            OUTPUT_BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results/Baseline_Results_Juliet/evaluate_qwen3-coder:free_temp_02_baseline_juliet"
+            BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_Juliet/compiled_Juliet_O0-fno-builtin-U-FORTIFY-SOURCE"
+            OUTPUT_BASE_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results_run2/Baseline_Results_Juliet/Juliet_baseline_evaluation_kimi_k2_temp=0.2"
 
             log.info(
                 "JulietBatchRunner",

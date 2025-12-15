@@ -200,10 +200,14 @@ def init(path_ctr):
             binary_timings = []  # Store (binary_name, elapsed_seconds, num_paths) for each binary
             total_paths_found = 0
             processed_binaries = 0
+            # FLAVIO: Track token usage across all AI analyses
+            total_prompt_tokens = 0
+            total_completion_tokens = 0
+            total_tokens = 0
 
             # Hardcoded paths for now
-            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_CASTLE/Compiled_CASTLE_O0"
-            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results/Baseline_Results_CASTLE/CASTLE_baseline_evaluation_qwen3_coder_480b_a35b_Instruct_temp=02"
+            BINARIES_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Binaries_Diff_Opt_Levels_CASTLE/Compiled_CASTLE_O0_nobuiltin_nofortify"
+            OUTPUT_DIR = "/Users/flaviogottschalk/dev/BachelorArbeit/Baseline_Results_run2/Baseline_Results_CASTLE/CASTLE_baseline_evaluation_kimi_k2_temp=02"
 
             os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -612,6 +616,13 @@ def init(path_ctr):
                                     else str(path.ai_report.timestamp),
                                 }
                                 simplified_data["ai_report"] = ai_data
+
+                                # FLAVIO: Accumulate token usage
+                                total_prompt_tokens += path.ai_report.prompt_tokens
+                                total_completion_tokens += (
+                                    path.ai_report.completion_tokens
+                                )
+                                total_tokens += path.ai_report.total_tokens
                             else:
                                 simplified_data["ai_report"] = None
 
@@ -737,6 +748,9 @@ def init(path_ctr):
                 }
                 if longest_binary[0]
                 else None,
+                "total_prompt_tokens": total_prompt_tokens,
+                "total_completion_tokens": total_completion_tokens,
+                "total_tokens": total_tokens,
                 "cancelled": self.cancelled,
                 "timestamp": datetime.now().isoformat(),
             }

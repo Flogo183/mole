@@ -24,6 +24,7 @@ import json
 import os
 import random
 import textwrap
+import time
 
 
 tag = "Mole.AI"
@@ -91,7 +92,7 @@ class AiService(BackgroundTask):
         )
         tool_lst = "\n".join(f"- `{tool:s}`" for tool in tools.keys())
         prompt = textwrap.dedent(
-            f"""You are a vulnerability research assistant specializing in static backward slicing of variables in Binary Ninja’s Medium Level Intermediate Language (MLIL) in Static Single Assignment (SSA) form. Your task is to determine whether a given slice corresponds to a real and exploitable vulnerability.
+            f"""You are a vulnerability research assistant specializing in static backward slicing of variables in Binary Ninja's Medium Level Intermediate Language (MLIL) in Static Single Assignment (SSA) form. Your task is to determine whether a given slice corresponds to a real and exploitable vulnerability. Provide your final assessment in JSON format.
         
 Perform the following steps:
 - **Understand the Path and Reachability**: Use `get_code_for_functions_containing` or `get_code_for_functions_by_name` to retrieve the relevant function(s). Examine the code surrounding the sliced instructions. For reachability, use `get_callers_by_address` or `get_callers_by_name` to analyze the calling context.
@@ -107,7 +108,13 @@ Perform the following steps:
 Use the following tools to support your analysis:
 {tool_lst:s}
 
-Be proactive in exploring upstream paths, analyzing data/control dependencies, and reasoning about practical exploitability. You have {str(self._max_turns):s} turns to complete your assessment.
+**EFFICIENCY GUIDELINES:**
+- Work efficiently and provide your assessment as soon as you have sufficient information to make a confident determination.
+- For straightforward cases (obviously safe code or clear vulnerabilities), gather only the essential context before providing your report.
+- For complex or ambiguous cases, continue investigating with additional tool calls to ensure accuracy.
+- You have up to {str(self._max_turns):s} turns available, but aim to complete simpler analyses in fewer turns.
+- Only request additional information if it will meaningfully impact your assessment.
+- Balance thoroughness with efficiency: don't stop prematurely, but don't over-investigate either.
 """
         )
         return prompt
@@ -174,154 +181,87 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
         token_usage: Dict[str, int],
         custom_tag: str = tag,
     ) -> Optional[ParsedChatCompletionMessage]:
-        """FLAVIO: ADD a fallback for when the chosen AI model does not support structuered ouput"""
         """
         This method sends the given messages to the OpenAI client and returns the completion
         message.
         """
         message = None
         try:
-            # FLAVIO: Changed from OpenAI beta.parse() to OpenRouter standard format
-            # Try structured output first, but skip for Gemini (doesn't support it with tools)
-            use_structured_output = "gemini" not in self._model.lower()
+            # Try beta parse API first
+            try:
+                completion = client.beta.chat.completions.parse(
+                    messages=messages,
+                    model=self._model,
+                    tools=self._tools,
+                    max_completion_tokens=self._max_completion_tokens,
+                    temperature=self._temperature,
+                    response_format=VulnerabilityReport,
+                )
+                message = completion.choices[0].message
 
-            # Try with structured output first
-            if use_structured_output:
-                try:
-                    # FLAVIO: Using OpenRouter standard format instead of OpenAI beta API
-                    # OpenRouter expects: response_format={"type": "json_schema", "json_schema": {...}}
-                    # NOT: response_format=PydanticModel (OpenAI beta feature)
-                    completion = client.chat.completions.create(
-                        messages=messages,
-                        model=self._model,
-                        tools=self._tools,
-                        max_tokens=self._max_completion_tokens,
-                        temperature=self._temperature,
-                        seed=self._seed,
-                        response_format={
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": "vulnerability_report",
-                                "strict": True,
-                                "schema": VulnerabilityReport.model_json_schema(),
-                            },
-                        },
+                # Track token usage
+                if completion.usage:
+                    token_usage["prompt_tokens"] += completion.usage.prompt_tokens
+                    token_usage["completion_tokens"] += (
+                        completion.usage.completion_tokens
                     )
+                    token_usage["total_tokens"] += completion.usage.total_tokens
 
-                    # FLAVIO: OpenRouter returns JSON string in content, not parsed object
-                    # Must manually parse with json.loads() and instantiate Pydantic model
-                    raw_message = completion.choices[0].message
-                    if raw_message.content and raw_message.content.strip():
-                        parsed_dict = json.loads(raw_message.content.strip())
-                        raw_message.parsed = VulnerabilityReport(**parsed_dict)
-                    message = raw_message
-                    log.info(
-                        custom_tag,
-                        f"Using structured output (OpenRouter format) for '{self._model}'",
-                    )
+            except Exception as beta_error:
+                log.warn(
+                    custom_tag,
+                    f"Beta parse API failed: {beta_error}. Falling back to manual parsing.",
+                )
 
-                except Exception as structured_error:
-                    log.error(
-                        custom_tag, f"Structured output failed: {structured_error}"
-                    )
-                    # FLAVIO: Fall back to prompt-based approach for models with limitations
-                    # (Gemini with tools, Qwen requirements, provider incompatibilities)
-                    use_structured_output = False
-
-            # FLAVIO: Fallback approach - use strong JSON prompts + regex extraction
-            # Works for: Gemini, Qwen, Llama, and other models with structured output limitations
-            if not use_structured_output or message is None:
-                # FLAVIO: Add strong JSON formatting instruction for non-structured-output models
-                modified_messages = list(messages)
-                for msg in modified_messages:
-                    if msg.get("role") == "system":
-                        msg["content"] += (
-                            "\n\n=== CRITICAL OUTPUT FORMAT REQUIREMENT ===\n"
-                            "When you have completed your analysis and used all necessary tools, "
-                            "you MUST return your final response as ONLY valid JSON with no additional text before or after. "
-                            "Do NOT provide explanations outside the JSON structure.\n\n"
-                            "Your response must be a single JSON object matching this exact schema:\n"
-                            + str(VulnerabilityReport.model_json_schema())
-                            + "\n\nExample format:\n"
-                            '{"truePositive": true, "vulnerabilityClass": "Buffer Overflow", '
-                            '"shortExplanation": "...", "severityLevel": "Critical", "inputExample": "..."}\n'
-                            "Return ONLY the JSON object, nothing else."
-                        )
-                        break
-
+                # Fallback: use standard API with manual parsing
                 completion = client.chat.completions.create(
-                    messages=modified_messages,
+                    messages=messages,
                     model=self._model,
                     tools=self._tools,
                     max_tokens=self._max_completion_tokens,
                     temperature=self._temperature,
-                    seed=self._seed,  # FLAVIO: Pass seed to fallback API call for reproducibility
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "vulnerability_report",
+                            "strict": True,
+                            "schema": VulnerabilityReport.model_json_schema(),
+                        },
+                    },
                 )
 
-                # Manually parse JSON from content
                 raw_message = completion.choices[0].message
-                if raw_message.content:
-                    try:
-                        import re
 
-                        content = raw_message.content.strip()
-
-                        # FLAVIO: Try to extract JSON if wrapped in text (common with Gemini)
-                        # First, try direct parsing
-                        try:
-                            parsed_dict = json.loads(content)
-                        except json.JSONDecodeError:
-                            # If that fails, try to find JSON object in the text
-                            # Look for content between first { and last }
-                            json_match = re.search(r"\{.*\}", content, re.DOTALL)
-                            if json_match:
-                                json_str = json_match.group(0)
-                                log.info(
-                                    custom_tag,
-                                    f"Extracted JSON from text response (length: {len(json_str)} chars)",
-                                )
-                                parsed_dict = json.loads(json_str)
-                            else:
-                                raise json.JSONDecodeError(
-                                    "No JSON object found in response", content, 0
-                                )
-
-                        raw_message.parsed = VulnerabilityReport(**parsed_dict)
-
-                    except json.JSONDecodeError as e:
-                        log.error(
-                            custom_tag, f"Failed to parse JSON response: {str(e)}"
-                        )
-                        # FLAVIO: Debug logging for Gemini response issues
-                        log.debug(
-                            custom_tag,
-                            f"Content preview: {raw_message.content[:200] if raw_message.content else 'None'}...",
-                        )
-                        raw_message.parsed = None
-                    except Exception as e:
-                        log.error(
-                            custom_tag,
-                            f"Failed to create VulnerabilityReport: {str(e)}",
-                        )
-                        raw_message.parsed = None
-                else:
-                    # FLAVIO: Log when content is empty
-                    log.warn(
-                        custom_tag,
-                        f"Response has no content. Tool calls: {raw_message.tool_calls is not None}, "
-                        f"Refusal: {getattr(raw_message, 'refusal', None)}",
-                    )
+                # If response has tool calls, return without parsing content
+                if raw_message.tool_calls:
                     raw_message.parsed = None
-                message = raw_message
+                    message = raw_message
+                # Otherwise try to parse structured output from content
+                elif raw_message.content:
+                    try:
+                        parsed_dict = json.loads(raw_message.content.strip())
+                        raw_message.parsed = VulnerabilityReport(**parsed_dict)
+                        message = raw_message
+                    except Exception as e:
+                        log.error(custom_tag, f"Failed to parse structured output: {e}")
+                        raw_message.parsed = None
+                        message = raw_message
+                else:
+                    log.error(custom_tag, "No content or tool calls in response")
+                    raw_message.parsed = None
+                    message = raw_message
 
-            # Extract token usage
-            if completion.usage:
-                token_usage["prompt_tokens"] += completion.usage.prompt_tokens
-                token_usage["completion_tokens"] += completion.usage.completion_tokens
-                token_usage["total_tokens"] += completion.usage.total_tokens
+                # Track token usage
+                if completion.usage:
+                    token_usage["prompt_tokens"] += completion.usage.prompt_tokens
+                    token_usage["completion_tokens"] += (
+                        completion.usage.completion_tokens
+                    )
+                    token_usage["total_tokens"] += completion.usage.total_tokens
 
         except Exception as e:
             log.error(custom_tag, f"Failed to send messages: {str(e):s}")
+
         return message
 
     def _execute_tool_call(
@@ -386,13 +326,38 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
         return results
 
     def _analyze_path(
-        self, path_id: int, path: Path
+        self, path_id: int, path: Path, max_retries: int = 3
     ) -> Optional[AiVulnerabilityReport]:
         """
         This method analyzes a path using AI and returns a vulnerability report.
+        Retries up to max_retries times if parsing fails or no report is received.
+        """
+        for attempt in range(1, max_retries + 1):
+            result = self._analyze_path_single(path_id, path, attempt, max_retries)
+            if result is not None:
+                return result
+            if attempt < max_retries:
+                log.warn(
+                    f"{tag}] [Path:{path_id}",
+                    f"Retry {attempt}/{max_retries} failed, attempting again...",
+                )
+                time.sleep(1)  # Brief delay before retry
+        log.error(
+            f"{tag}] [Path:{path_id}",
+            f"All {max_retries} attempts failed to get valid response",
+        )
+        return None
+
+    def _analyze_path_single(
+        self, path_id: int, path: Path, attempt: int = 1, max_retries: int = 1
+    ) -> Optional[AiVulnerabilityReport]:
+        """
+        Single attempt to analyze a path using AI.
         """
         # Custom tag for logging
-        custom_tag = f"{tag:s}] [Path:{path_id:d}"
+        custom_tag = f"{tag:s}] [Path:{path_id:d}" + (
+            f"] [Attempt:{attempt}/{max_retries}" if max_retries > 1 else ""
+        )
         # Create OpenAI client
         client = self._create_openai_client(custom_tag)
         # No OpenAI client available (mock mode)
@@ -440,6 +405,7 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                 if self.cancelled:
                     log.warn(custom_tag, f"Cancel conversation in turn {turn:d}")
                     return None
+
                 # Send messages and receive response
                 log.info(custom_tag, f"Sending messages in conversation turn {turn:d}")
                 response = self._send_messages(
@@ -488,9 +454,42 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                     tool_name = tool_call.function.name
                     if tool_name not in tools_used:
                         tools_used.append(tool_name)
+
+                # Add warning when approaching turn limit (after tool results, before next turn)
+                if turn == self._max_turns - 1:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "🚨 CRITICAL WARNING: Only ONE turn remains after this. You have already used more turns than expected for most analyses. You MUST provide your final vulnerability report in the next turn. Make only the most essential tool calls now, or provide your assessment immediately if you have sufficient information.",
+                        }
+                    )
+                elif turn == self._max_turns:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "🛑 FINAL TURN - MANDATORY REPORT: This is your absolute last turn. You MUST return your vulnerability report NOW. Do NOT request any tool calls. Provide your best assessment based on the information you have already gathered.",
+                        }
+                    )
             # Return vulnerability report if final response is available
-            if not response or not response.parsed:
-                log.error(custom_tag, "No vulnerability report received")
+            if not response:
+                log.error(
+                    custom_tag,
+                    "No response received from API after all conversation turns",
+                )
+                return None
+            if not response.parsed:
+                log.error(
+                    custom_tag,
+                    f"No vulnerability report parsed. Content exists: {response.content is not None}, "
+                    f"Content length: {len(response.content) if response.content else 0}, "
+                    f"Tool calls: {response.tool_calls is not None}",
+                )
+                # FLAVIO: Log the actual content for debugging
+                if response.content:
+                    log.debug(
+                        custom_tag,
+                        f"Unparsed content preview: {response.content[:500]}",
+                    )
                 return None
             report: VulnerabilityReport = response.parsed
             vuln_report = AiVulnerabilityReport(
@@ -551,11 +550,14 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
         with futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             # Submit tasks
             tasks: Dict[futures.Future, int] = {}
-            for path_id, path in self._paths:
+            for idx, (path_id, path) in enumerate(self._paths):
                 if self.cancelled:
                     break
                 task = executor.submit(self._analyze_path, path_id, path)
                 tasks[task] = path_id
+                # FLAVIO Add 1 second delay between submissions to avoid overwhelming the API
+                if idx < len(self._paths) - 1:  # Don't delay after the last submission
+                    time.sleep(0.5)
             # Wait for tasks to complete
             for cnt, task in enumerate(futures.as_completed(tasks), start=1):
                 self.progress = f"Mole analyzed path {cnt:d}/{len(self._paths):d}"
@@ -565,5 +567,8 @@ Be proactive in exploring upstream paths, analyzing data/control dependencies, a
                     vuln_report = task.result()
                     if vuln_report:
                         self._analyzed_path(path_id, vuln_report)
+                # FLAVIO Add 1 second delay after receiving each AI report
+                if cnt < len(self._paths):  # Don't delay after the last report
+                    time.sleep(0.5)
         log.info(tag, "AI analysis completed")
         return

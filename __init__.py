@@ -15,6 +15,8 @@ if "pytest" not in sys.modules:
     import batch_runner
     import batch_runner_juliet
     import batch_runner_primevul
+    import single_binary_runner
+    import rerun_missing_reports
 
     # Services
     config_service = ConfigService()
@@ -50,3 +52,9 @@ if "pytest" not in sys.modules:
 
     # Initialize PrimeVul runner
     batch_runner_primevul.init(path_ctr)
+
+    # Initialize single binary runner with path_ctr
+    single_binary_runner.init(path_ctr)
+
+    # Initialize rerun missing reports with path_ctr
+    rerun_missing_reports.init(path_ctr)
